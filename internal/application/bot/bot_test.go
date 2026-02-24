@@ -6,10 +6,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
 )
 
 type mockTelegramAPI struct {
-	updatesChan chan Update
+	updatesChan chan tgapi.Update
 	sentMessages []struct {
 		chatID int64
 		text string
@@ -17,7 +18,7 @@ type mockTelegramAPI struct {
 	mu sync.Mutex
 }
 
-func (m *mockTelegramAPI) GetMessagesChan() <-chan Update {
+func (m *mockTelegramAPI) GetMessagesChan() <-chan tgapi.Update {
 	return m.updatesChan
 }
 
@@ -49,12 +50,16 @@ func (m *mockTelegramAPI) sentMessagesCopy() []struct {
 	return copySlice
 }
 
+func (m *mockTelegramAPI) SetupCommands(_ []tgapi.Commands) (int, error) {
+	return 0, nil
+}
+
 func TestStartPolling(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		description string
-		updates []Update
+		updates []tgapi.Update
 		expectedSent []struct {
 			chatID int64
 			text string
@@ -63,7 +68,7 @@ func TestStartPolling(t *testing.T) {
 	}{
 		{
 			description: "supported commands",
-			updates: []Update{
+			updates: []tgapi.Update{
 				{IsMessage: true, Message: "/start", ChatID: 1},
 				{IsMessage: true, Message: "/help", ChatID: 2},
 			},
@@ -77,7 +82,7 @@ func TestStartPolling(t *testing.T) {
 		},
 		{
 			description: "unsupported command",
-			updates: []Update{
+			updates: []tgapi.Update{
 				{IsMessage: true, Message: "random text", ChatID: 3},
 			},
 			expectedSent: []struct {
@@ -89,14 +94,14 @@ func TestStartPolling(t *testing.T) {
 		},
 		{
 			description: "non-message update (should be ignored)",
-			updates: []Update{
+			updates: []tgapi.Update{
 				{IsMessage: false, Message: "not a message", ChatID: 4},
 			},
 			expectNoSend: true,
 		},
 		{
 			description: "mixed updates",
-			updates: []Update{
+			updates: []tgapi.Update{
 				{IsMessage: true, Message: "/start", ChatID: 1},
 				{IsMessage: false, Message: "ignore", ChatID: 2},
 				{IsMessage: true, Message: "/help", ChatID: 3},
@@ -116,7 +121,7 @@ func TestStartPolling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
 			mockAPI := &mockTelegramAPI{
-				updatesChan: make(chan Update, len(tt.updates)),
+				updatesChan: make(chan tgapi.Update, len(tt.updates)),
 			}
 
 			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

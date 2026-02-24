@@ -2,11 +2,21 @@ package tgapi
 
 import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/bot"
 )
 
 type TgAPI struct {
 	bot *tgbotapi.BotAPI
+}
+
+type Update struct {
+	IsMessage bool
+	Message string
+	ChatID int64
+}
+
+type Commands struct {
+	Command string
+	Description string
 }
 
 func NewTgApi(token string) (TgAPI, error) {
@@ -19,21 +29,31 @@ func NewTgApi(token string) (TgAPI, error) {
 	return res, nil
 }
 
-func (t TgAPI) GetMessagesChan() <-chan bot.Update {
+func (t TgAPI) SetupCommands(cmds []Commands) (int, error) {
+	botCmds := make([]tgbotapi.BotCommand, len(cmds))
+	for i := range cmds {
+		botCmds[i] = tgbotapi.BotCommand{Command: cmds[i].Command, Description: cmds[i].Description}
+	}
+	config := tgbotapi.NewSetMyCommands(botCmds...)
+	resp, err := t.bot.Request(config)
+	return resp.ErrorCode, err
+}
+
+func (t TgAPI) GetMessagesChan() <-chan Update {
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
 
 	updates := t.bot.GetUpdatesChan(updateConfig)
-	out := make(chan bot.Update)
+	out := make(chan Update)
 
 	go func() {
 		defer close(out)
 
 		for update := range updates {
 			if update.Message != nil {
-				out <- bot.Update{IsMessage: true, ChatID: update.Message.Chat.ID, Message: update.Message.Text}
+				out <- Update{IsMessage: true, ChatID: update.Message.Chat.ID, Message: update.Message.Text}
 			} else {
-				out <- bot.Update{IsMessage: false}
+				out <- Update{IsMessage: false}
 			}
 		}
 	}()

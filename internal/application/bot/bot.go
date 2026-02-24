@@ -3,17 +3,13 @@ package bot
 import (
 	"fmt"
 	"log/slog"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
 )
 
-type Update struct {
-	IsMessage bool
-	Message string
-	ChatID int64
-}
-
 type telegramAPI interface {
-	GetMessagesChan() <-chan Update
+	GetMessagesChan() <-chan tgapi.Update
 	SendMessage(int64, string) error
+	SetupCommands(cmds []tgapi.Commands) (int, error)
 }
 
 type Bot struct {
@@ -25,7 +21,7 @@ func NewBot(logger *slog.Logger, api telegramAPI) *Bot {
 	return &Bot{logger: logger, tgAPI: api}
 }
 
-func handleMessage(message string) string {
+func (b *Bot) handleMessage(message string) string {
 	switch message {
 	case "/start":
 		return "welcome"
@@ -37,6 +33,11 @@ func handleMessage(message string) string {
 }
 
 func (b *Bot) StartPolling() {
+	respCode, err := b.tgAPI.SetupCommands([]tgapi.Commands{
+		{Command: "/start", Description: "start command"},
+		{Command: "/help", Description: "help command"},
+	})
+	b.logger.Info(fmt.Sprintf("requested commands setup with err %v and code %v", err, respCode))
 	updates := b.tgAPI.GetMessagesChan()
 	for update := range updates {
 		if !update.IsMessage {
@@ -44,7 +45,7 @@ func (b *Bot) StartPolling() {
 			continue
 		}
 		b.logger.Info(fmt.Sprintf("received text message: %s", update.Message))
-		reply := handleMessage(update.Message)
+		reply := b.handleMessage(update.Message)
 		err := b.tgAPI.SendMessage(update.ChatID, reply)
 		b.logger.Info(fmt.Sprintf("sent text message: %s", reply))
 		if err != nil {
