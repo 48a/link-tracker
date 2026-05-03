@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/bot"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/userstorage"
 )
 
 func main() {
@@ -23,7 +26,11 @@ func main() {
 
 	logger.Info("success!!!")
 
-	bot := bot.NewBot(logger, api)
+	storage := userstorage.NewUserStorage()
+
+	scrapperClient := scrapperapi.NewClient("http://127.0.0.1:8001", 5*time.Second)
+
+	bot := bot.NewBot(logger, api, storage, scrapperClient)
 
 	logger.Info("start polling")
 
