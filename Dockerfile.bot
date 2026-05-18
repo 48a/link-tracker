@@ -1,0 +1,17 @@
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+
+COPY . .
+
+RUN ["go", "build", "-o", "/out/bot", "./cmd/bot/main.go"]
+
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=build /out/bot /app
+
+EXPOSE 8002
+
+CMD ["/app/bot"]

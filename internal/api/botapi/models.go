@@ -1,14 +1,10 @@
-package scrapperapi
+package botapi
 
-type LinkResponse struct {
-	ID   int64    `json:"id"`
-	URL  string   `json:"url"`
-	Tags []string `json:"tags"`
-}
-
-type ListLinksResponse struct {
-	Links []LinkResponse `json:"links"`
-	Size  int            `json:"size"`
+type LinkUpdate struct {
+	ID          int64   `json:"id"`
+	URL         string  `json:"url"`
+	Description string  `json:"description"`
+	TgChatIDs   []int64 `json:"tgChatIds"`
 }
 
 type ApiErrorResponse struct {

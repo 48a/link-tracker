@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/scrapperapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/userstorage"
 )
@@ -67,4 +67,14 @@ func (b *Bot) StartPolling() {
 			b.logger.Error(fmt.Sprintf("can't send message: %v", err))
 		}
 	}
+}
+
+func (b *Bot) SendUpdate(updateInput SendUpdateInput) error {
+	for _, chatID := range updateInput.TgChatIDs {
+		err := b.tgAPI.SendMessage(chatID, fmt.Sprintf("update to link %q: %v", updateInput.URL, updateInput.Description))
+		if err != nil {
+			fmt.Printf("can't send update %#v\n", updateInput)
+		}
+	}
+	return nil
 }

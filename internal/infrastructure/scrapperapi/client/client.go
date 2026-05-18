@@ -1,4 +1,4 @@
-package scrapperapi
+package client
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/scrapperapi"
 )
 
 type client struct {
@@ -33,14 +35,14 @@ func NewClient(url string, timeout time.Duration) client {
 	return client{baseURL: url, cl: http.DefaultClient, timeout: timeout}
 }
 
-func (_ client) verifyResponse(linkResponse LinkResponse, id int64, link string, skipTags bool, tags []string, operation string) error {
+func (_ client) verifyResponse(linkResponse scrapperapi.LinkResponse, id int64, link string, skipTags bool, tags []string, operation string) error {
 	if linkResponse.ID != id {
 		return ErrIdMismatch{operation: operation}
 	}
 	if linkResponse.URL != link {
 		return ErrLinkMismatch{operation: operation}
 	}
-	if skipTags || slices.Compare(linkResponse.Tags, tags) != 0 {
+	if !skipTags && slices.Compare(linkResponse.Tags, tags) != 0 {
 		return ErrTagsMismatch{operation: operation}
 	}
 	return nil
@@ -93,7 +95,7 @@ func (c client) RegisterChat(id int64) error {
 		return nil
 	}
 
-	var responseError ApiErrorResponse
+	var responseError scrapperapi.ApiErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
 		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
@@ -125,7 +127,7 @@ func (c client) DeleteChat(id int64) error {
 		return nil
 	}
 
-	var responseError ApiErrorResponse
+	var responseError scrapperapi.ApiErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
 		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
@@ -140,7 +142,7 @@ func (c client) DeleteChat(id int64) error {
 	return ErrUnknownStatusCode{operation: operation}
 }
 
-func (c client) GetLinks(id int64) (ListLinksResponse, error) {
+func (c client) GetLinks(id int64) (scrapperapi.ListLinksResponse, error) {
 	operation := fmt.Sprintf("get links %v", id)
 	resp, err := c.restApiRequest(
 		operation,
@@ -154,34 +156,34 @@ func (c client) GetLinks(id int64) (ListLinksResponse, error) {
 		nil,
 	)
 	if err != nil {
-		return ListLinksResponse{}, err
+		return scrapperapi.ListLinksResponse{}, err
 	}
 
 	if resp.statusCode == 200 {
-		var result ListLinksResponse
+		var result scrapperapi.ListLinksResponse
 		err = json.Unmarshal(resp.body, &result)
 		if err != nil {
-			return ListLinksResponse{}, ErrCantUnmarshalResponse{operation: operation, wrapped: err}
+			return scrapperapi.ListLinksResponse{}, ErrCantUnmarshalResponse{operation: operation, wrapped: err}
 		}
 		return result, nil
 	}
 
-	var responseError ApiErrorResponse
+	var responseError scrapperapi.ApiErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
-		return ListLinksResponse{}, ErrCantUnmarshalResponse{operation: operation, wrapped: err}
+		return scrapperapi.ListLinksResponse{}, ErrCantUnmarshalResponse{operation: operation, wrapped: err}
 	}
 
 	switch resp.statusCode {
 	case 400:
-		return ListLinksResponse{}, NewApiError(400, responseError, operation)
+		return scrapperapi.ListLinksResponse{}, NewApiError(400, responseError, operation)
 	case 404:
-		return ListLinksResponse{}, NewApiError(404, responseError, operation)
+		return scrapperapi.ListLinksResponse{}, NewApiError(404, responseError, operation)
 	}
-	return ListLinksResponse{}, ErrUnknownStatusCode{operation: operation}
+	return scrapperapi.ListLinksResponse{}, ErrUnknownStatusCode{operation: operation}
 }
 
-func (c client) AddLink(id int64, addRequest AddLinkRequest) error {
+func (c client) AddLink(id int64, addRequest scrapperapi.AddLinkRequest) error {
 	operation := fmt.Sprintf("add link %#v to %v", addRequest, id)
 
 	body, err := json.Marshal(addRequest)
@@ -205,7 +207,7 @@ func (c client) AddLink(id int64, addRequest AddLinkRequest) error {
 	}
 
 	if resp.statusCode == 200 {
-		var linkResponse LinkResponse
+		var linkResponse scrapperapi.LinkResponse
 		err = json.Unmarshal(resp.body, &linkResponse)
 		if err != nil {
 			return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
@@ -213,7 +215,7 @@ func (c client) AddLink(id int64, addRequest AddLinkRequest) error {
 		return c.verifyResponse(linkResponse, id, addRequest.URL, false, addRequest.Tags, operation)
 	}
 
-	var responseError ApiErrorResponse
+	var responseError scrapperapi.ApiErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
 		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
@@ -230,7 +232,7 @@ func (c client) AddLink(id int64, addRequest AddLinkRequest) error {
 	return ErrUnknownStatusCode{operation: operation}
 }
 
-func (c client) DeleteLink(id int64, deleteRequest DeleteLinkRequest) error {
+func (c client) DeleteLink(id int64, deleteRequest scrapperapi.DeleteLinkRequest) error {
 	operation := fmt.Sprintf("delete link %#v to %v", deleteRequest, id)
 
 	body, err := json.Marshal(deleteRequest)
@@ -254,7 +256,7 @@ func (c client) DeleteLink(id int64, deleteRequest DeleteLinkRequest) error {
 	}
 
 	if resp.statusCode == 200 {
-		var linkResponse LinkResponse
+		var linkResponse scrapperapi.LinkResponse
 		err = json.Unmarshal(resp.body, &linkResponse)
 		if err != nil {
 			return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
@@ -262,7 +264,7 @@ func (c client) DeleteLink(id int64, deleteRequest DeleteLinkRequest) error {
 		return c.verifyResponse(linkResponse, id, deleteRequest.URL, true, []string{}, operation)
 	}
 
-	var responseError ApiErrorResponse
+	var responseError scrapperapi.ApiErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
 		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}

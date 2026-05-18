@@ -1,4 +1,4 @@
-package scrapperapi
+package server
 
 import (
 	"encoding/json"
@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/scrapperapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/scrapper"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 )
@@ -31,7 +32,7 @@ func NewHandler(svc service) *handler {
 func (h *handler) RegisterChat(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "invalid chat id",
 		}, http.StatusBadRequest))
 		return
@@ -39,11 +40,11 @@ func (h *handler) RegisterChat(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.svc.RegisterChat(id); err != nil {
 		if errors.As(err, new(domain.ErrChatAlreadyExist)) {
-			h.response(w, http.StatusConflict, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusConflict, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "chat already exist",
 			}, http.StatusConflict))
 		} else {
-			h.response(w, http.StatusInternalServerError, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusInternalServerError, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "unknown error occurred",
 			}, http.StatusInternalServerError))
 		}
@@ -56,7 +57,7 @@ func (h *handler) RegisterChat(w http.ResponseWriter, r *http.Request) {
 func (h *handler) DeleteChat(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "invalid chat id",
 		}, http.StatusBadRequest))
 		return
@@ -64,11 +65,11 @@ func (h *handler) DeleteChat(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.svc.DeleteChat(id); err != nil {
 		if errors.As(err, new(domain.ErrChatNotExist)) {
-			h.response(w, http.StatusNotFound, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusNotFound, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "chat not exist",
 			}, http.StatusNotFound))
 		} else {
-			h.response(w, http.StatusInternalServerError, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusInternalServerError, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "unknown error occurred",
 			}, http.StatusInternalServerError))
 		}
@@ -81,7 +82,7 @@ func (h *handler) DeleteChat(w http.ResponseWriter, r *http.Request) {
 func (h *handler) GetLinks(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "invalid chat id",
 		}, http.StatusBadRequest))
 		return
@@ -90,42 +91,39 @@ func (h *handler) GetLinks(w http.ResponseWriter, r *http.Request) {
 	links, err := h.svc.GetLinks(id)
 	if err != nil {
 		if errors.As(err, new(domain.ErrChatNotExist)) {
-			h.response(w, http.StatusNotFound, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusNotFound, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "chat not exist",
 			}, http.StatusNotFound))
 		} else {
-			h.response(w, http.StatusInternalServerError, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusInternalServerError, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "unknown error occurred",
 			}, http.StatusInternalServerError))
 		}
 		return
 	}
 
-	fmt.Printf("here !!!! received links %#v\n", links)
-
-	resp := ListLinksResponse{Links: make([]LinkResponse, len(links)), Size: len(links)}
+	resp := scrapperapi.ListLinksResponse{Links: make([]scrapperapi.LinkResponse, len(links)), Size: len(links)}
 	for i := range links {
-		resp.Links[i] = LinkResponse{
+		resp.Links[i] = scrapperapi.LinkResponse{
 			ID:   links[i].ID,
 			URL:  links[i].URL,
 			Tags: links[i].Tags,
 		}
 	}
 
-	fmt.Printf("write response as %#v\n", resp)
 	h.response(w, http.StatusOK, resp)
 }
 
 func (h *handler) AddLink(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "invalid chat id",
 		}, http.StatusBadRequest))
 		return
 	}
 
-	addRequest := AddLinkRequest{}
+	addRequest := scrapperapi.AddLinkRequest{}
 	ok := h.readBody(w, r.Body, &addRequest)
 	if !ok {
 		return
@@ -137,22 +135,22 @@ func (h *handler) AddLink(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.As(err, new(domain.ErrChatNotExist)) {
-			h.response(w, http.StatusNotFound, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusNotFound, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "chat not exist",
 			}, http.StatusNotFound))
 		} else if errors.As(err, new(domain.ErrAlreadyTracking)) {
-			h.response(w, http.StatusConflict, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusConflict, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "link is already being tracked",
 			}, http.StatusConflict))
 		} else {
-			h.response(w, http.StatusInternalServerError, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusInternalServerError, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "unknown error occurred",
 			}, http.StatusInternalServerError))
 		}
 		return
 	}
 
-	h.response(w, http.StatusOK, LinkResponse{
+	h.response(w, http.StatusOK, scrapperapi.LinkResponse{
 		ID:   link.ID,
 		URL:  link.URL,
 		Tags: link.Tags,
@@ -162,13 +160,13 @@ func (h *handler) AddLink(w http.ResponseWriter, r *http.Request) {
 func (h *handler) DeleteLink(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.Header.Get("Tg-Chat-Id"), 10, 64)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "invalid chat id",
 		}, http.StatusBadRequest))
 		return
 	}
 
-	deleteRequest := DeleteLinkRequest{}
+	deleteRequest := scrapperapi.DeleteLinkRequest{}
 	ok := h.readBody(w, r.Body, &deleteRequest)
 	if !ok {
 		return
@@ -179,18 +177,18 @@ func (h *handler) DeleteLink(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.As(err, new(domain.ErrChatOrLinkNotFound)) {
-			h.response(w, http.StatusNotFound, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusNotFound, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "chat not exist or link not found",
 			}, http.StatusNotFound))
 		} else {
-			h.response(w, http.StatusInternalServerError, setApiErrorCode(ApiErrorResponse{
+			h.response(w, http.StatusInternalServerError, setApiErrorCode(scrapperapi.ApiErrorResponse{
 				Description: "unknown error occurred",
 			}, http.StatusInternalServerError))
 		}
 		return
 	}
 
-	h.response(w, http.StatusOK, LinkResponse{
+	h.response(w, http.StatusOK, scrapperapi.LinkResponse{
 		ID:   link.ID,
 		URL:  link.URL,
 		Tags: link.Tags,
@@ -210,16 +208,15 @@ func (h *handler) response(w http.ResponseWriter, httpStatus int, data any) {
 func (h *handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) bool {
 	requestBody, err := io.ReadAll(body)
 	if err != nil {
-		h.response(w, http.StatusInternalServerError, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusInternalServerError, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "can't read request body",
 		}, http.StatusInternalServerError))
 		return false
 	}
 
-	// fmt.Println("body:", string(requestBody))
 	err = json.Unmarshal(requestBody, dst)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setApiErrorCode(scrapperapi.ApiErrorResponse{
 			Description: "invalid request in body",
 		}, http.StatusBadRequest))
 		return false
@@ -227,7 +224,7 @@ func (h *handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) b
 	return true
 }
 
-func setApiErrorCode(apiError ApiErrorResponse, httpStatus int) ApiErrorResponse {
+func setApiErrorCode(apiError scrapperapi.ApiErrorResponse, httpStatus int) scrapperapi.ApiErrorResponse {
 	apiError.Code = strconv.Itoa(httpStatus)
 	return apiError
 }

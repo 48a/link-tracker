@@ -1,4 +1,4 @@
-package scrapperapi
+package server
 
 import (
 	"net/http"

@@ -1,24 +1,43 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/scrapper"
+	botclient "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/linkstorage"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi"
+	scrapperserver "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi/server"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	linkStorage := linkstorage.NewLinkStorage()
+	linkStorage, err := linkstorage.NewLinkStorage(os.Getenv("DSN"))
+	if err != nil {
+		fmt.Printf("create linkstorage: %v\n", err)
+		os.Exit(1)
+	}
 
-	svc := scrapper.NewService(logger, linkStorage)
+	client := botclient.NewClient("http://bot:8002", 5*time.Second)
 
-	handler := scrapperapi.NewHandler(svc)
+	svc, err := scrapper.NewService(logger, client, linkStorage)
+	if err != nil {
+		fmt.Printf("scrapper error: %v\n", err)
+		os.Exit(1)
+	}
 
-	srv := scrapperapi.NewServer("127.0.0.1:8001", handler)
+	err = svc.LoadAllLinks()
+	if err != nil {
+		fmt.Printf("scrapper load all links: %v\n", err)
+		os.Exit(1)
+	}
+
+	handler := scrapperserver.NewHandler(svc)
+
+	srv := scrapperserver.NewServer(":8001", handler)
 
 	if err := srv.Run(); err != nil {
 		logger.Error(err.Error())

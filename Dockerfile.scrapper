@@ -1,0 +1,18 @@
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+
+COPY . .
+
+RUN ["go", "build", "-o", "/out/scrapper", "./cmd/scrapper/main.go"]
+
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=build /out/scrapper /app
+COPY --from=build /src/migrations /app/migrations
+
+EXPOSE 8001
+
+CMD ["/app/scrapper"]

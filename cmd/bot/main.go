@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/bot"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi"
+	botserver "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/server"
+	scrapper "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/userstorage"
 )
@@ -28,11 +29,23 @@ func main() {
 
 	storage := userstorage.NewUserStorage()
 
-	scrapperClient := scrapperapi.NewClient("http://127.0.0.1:8001", 5*time.Second)
+	scrapperClient := scrapper.NewClient("http://scrapper:8001", 5*time.Second)
 
 	bot := bot.NewBot(logger, api, storage, scrapperClient)
 
-	logger.Info("start polling")
+	go func() {
+		handler := botserver.NewHandler(bot)
 
+		srv := botserver.NewServer(":8002", handler)
+
+		logger.Info("start server")
+
+		err = srv.Run()
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	logger.Info("start polling")
 	bot.StartPolling()
 }

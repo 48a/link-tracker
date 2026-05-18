@@ -1,7 +1,9 @@
-package scrapperapi
+package client
 
 import (
 	"fmt"
+
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/botapi"
 )
 
 type ErrTimedOut struct{}
@@ -83,37 +85,13 @@ func (e ErrCantMarshalRequest) Unwrap() error {
 	return e.wrapped
 }
 
-type ErrIdMismatch struct {
-	operation string
-}
-
-func (e ErrIdMismatch) Error() string {
-	return e.operation + ": response chat id mismatch"
-}
-
-type ErrLinkMismatch struct {
-	operation string
-}
-
-func (e ErrLinkMismatch) Error() string {
-	return e.operation + ": response link mismatch"
-}
-
-type ErrTagsMismatch struct {
-	operation string
-}
-
-func (e ErrTagsMismatch) Error() string {
-	return e.operation + ": response tags mismatch"
-}
-
 type ApiError struct {
 	operation     string
 	StatusCode    int
-	ErrorResponse ApiErrorResponse
+	ErrorResponse botapi.ApiErrorResponse
 }
 
-func NewApiError(statusCode int, errorResponse ApiErrorResponse, operation string) ApiError {
+func NewApiError(statusCode int, errorResponse botapi.ApiErrorResponse, operation string) ApiError {
 	return ApiError{StatusCode: statusCode, ErrorResponse: errorResponse, operation: operation}
 }
 
