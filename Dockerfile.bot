@@ -4,7 +4,7 @@ WORKDIR /src
 
 COPY . .
 
-RUN ["go", "build", "-o", "/out/bot", "./cmd/bot/main.go"]
+RUN ["go", "build", "-o", "/out/bot", "./cmd/bot/"]
 
 FROM alpine:latest
 

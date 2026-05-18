@@ -13,7 +13,7 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/botapi"
 )
 
-type client struct {
+type restClient struct {
 	baseURL string
 	cl      *http.Client
 	timeout time.Duration
@@ -24,11 +24,11 @@ type responseData struct {
 	statusCode int
 }
 
-func NewClient(url string, timeout time.Duration) client {
-	return client{baseURL: url, cl: http.DefaultClient, timeout: timeout}
+func NewRestClient(url string, timeout time.Duration) restClient {
+	return restClient{baseURL: url, cl: http.DefaultClient, timeout: timeout}
 }
 
-func (c client) restApiRequest(operation, method, url string, requestBody io.Reader) (responseData, error) {
+func (c restClient) restApiRequest(operation, method, url string, requestBody io.Reader) (responseData, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -54,7 +54,7 @@ func (c client) restApiRequest(operation, method, url string, requestBody io.Rea
 	return responseData{body: b, statusCode: resp.StatusCode}, nil
 }
 
-func (c client) SendUpdate(linkUpdate botapi.LinkUpdate) error {
+func (c restClient) SendUpdate(linkUpdate botapi.LinkUpdate) error {
 	operation := fmt.Sprintf("send link update %#v", linkUpdate)
 
 	body, err := json.Marshal(linkUpdate)

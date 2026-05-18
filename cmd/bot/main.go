@@ -1,25 +1,45 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/bot"
-	botserver "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/server"
+	botconsumer "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/consumer"
+
+	// botserver "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/server"
 	scrapper "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/userstorage"
 )
 
 func main() {
-	token := os.Getenv("APP_TELEGRAM_TOKEN")
+	if err := setEnv(); err != nil {
+		fmt.Printf("setEnv: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := newConfigFromEnv()
+	if err != nil {
+		fmt.Printf("new config from env: %v\n", err)
+		os.Exit(1)
+	}
+
+	if cfg.Token == "" {
+		fmt.Println("telegram token not set")
+		os.Exit(1)
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	logger.Info("verifying token..")
 
-	api, err := tgapi.NewTgApi(token)
+	api, err := tgapi.NewTgApi(cfg.Token)
 	if err != nil {
 		fmt.Printf("can't create tg api bot: %v\n", err)
 		os.Exit(2)
@@ -33,19 +53,41 @@ func main() {
 
 	bot := bot.NewBot(logger, api, storage, scrapperClient)
 
-	go func() {
-		handler := botserver.NewHandler(bot)
+	sigterm := make(chan os.Signal, 1)
+	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 
-		srv := botserver.NewServer(":8002", handler)
+	handler := botconsumer.NewHandler(bot)
 
-		logger.Info("start server")
+	consumer, err := botconsumer.NewConsumer(
+		handler,
+		cfg.KafkaBroker,
+		cfg.KafkaUser,
+		cfg.KafkaPassword,
+		cfg.KafkaConsumerGroup,
+		cfg.KafkaTopic,
+	)
+	if err != nil {
+		fmt.Printf("new consumer: %v\n", err)
+		os.Exit(1)
+	}
 
-		err = srv.Run()
-		if err != nil {
-			panic(err)
-		}
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
 
+	var wg sync.WaitGroup
+
+	logger.Info("start consumer")
+	wg.Go(func() { consumer.Serve(ctx) })
 	logger.Info("start polling")
-	bot.StartPolling()
+	wg.Go(bot.StartPolling)
+
+	<-sigterm
+
+	cancel()
+
+	wg.Wait()
+
+	if err := consumer.Close(); err != nil {
+		fmt.Printf("close concumer: %v", err)
+		os.Exit(1)
+	}
 }
