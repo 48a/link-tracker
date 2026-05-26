@@ -1,8 +1,10 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/scrapperapi"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
@@ -16,19 +18,20 @@ type telegramAPI interface {
 }
 
 type storeUserState interface {
-	GetUserState(chatID int64) (int, bool)
-	SetUserState(chatID int64, newState int)
-	SetRequestURL(chatID int64, link string)
-	SetRequestTags(chatID int64, tags []string)
-	GetRequest(chatID int64) userstorage.Request
+	GetUserState(ctx context.Context, chatID int64) (int, bool, error)
+	SetUserState(ctx context.Context, chatID int64, newState int) error
+	SetRequestURL(ctx context.Context, chatID int64, link string) error
+	SetRequestTags(ctx context.Context, chatID int64, tags []string) error
+	GetRequest(ctx context.Context, chatID int64) (userstorage.Request, error)
+	Close()
 }
 
 type scrapperClient interface {
-	RegisterChat(chatID int64) error
-	DeleteChat(chatID int64) error
-	GetLinks(chatID int64) (scrapperapi.ListLinksResponse, error)
-	AddLink(chatID int64, link scrapperapi.AddLinkRequest) error
-	DeleteLink(chatID int64, link scrapperapi.DeleteLinkRequest) error
+	RegisterChat(ctx context.Context, chatID int64) error
+	DeleteChat(ctx context.Context, chatID int64) error
+	GetLinks(ctx context.Context, chatID int64) (scrapperapi.ListLinksResponse, error)
+	AddLink(ctx context.Context, chatID int64, link scrapperapi.AddLinkRequest) error
+	DeleteLink(ctx context.Context, chatID int64, link scrapperapi.DeleteLinkRequest) error
 }
 
 type Bot struct {
@@ -42,39 +45,61 @@ func NewBot(logger *slog.Logger, api telegramAPI, userStorage storeUserState, cl
 	return &Bot{logger: logger, tgAPI: api, userStorage: userStorage, client: client}
 }
 
-func (b *Bot) StartPolling() {
-	respCode, err := b.tgAPI.SetupCommands([]tgapi.Commands{
-		{Command: "/start", Description: "register chat"},
-		{Command: "/help", Description: "help command"},
-		{Command: "/track", Description: "track link"},
-		{Command: "/untrack", Description: "untrack link"},
-		{Command: "/list", Description: "list tracked links with optional tag"},
-		{Command: "/cancel", Description: "cancel input"},
-		{Command: "/stop", Description: "unregister chat"},
-	})
-	b.logger.Info(fmt.Sprintf("requested commands setup with err %v and code %v", err, respCode))
-	updates := b.tgAPI.GetMessagesChan()
-	for update := range updates {
-		if !update.IsMessage {
-			b.logger.Warn("received unsupported message type")
-			continue
-		}
-		// b.logger.Info(fmt.Sprintf("received text message: %s", update.Message))
-		reply := b.handleMessage(update.Message, update.ChatID)
-		err := b.tgAPI.SendMessage(update.ChatID, reply)
-		// b.logger.Info(fmt.Sprintf("sent text message: %s", reply))
+func (b *Bot) stop() {
+	b.userStorage.Close()
+}
+
+func (b *Bot) StartPolling(ctx context.Context) {
+	if skipCommands := os.Getenv("SKIP_COMMANDS"); skipCommands != "TRUE" {
+		respCode, err := b.tgAPI.SetupCommands([]tgapi.Commands{
+			{Command: "/start", Description: "register chat"},
+			{Command: "/help", Description: "help command"},
+			{Command: "/track", Description: "track link"},
+			{Command: "/untrack", Description: "untrack link"},
+			{Command: "/list", Description: "list tracked links with optional tag"},
+			{Command: "/cancel", Description: "cancel input"},
+			{Command: "/stop", Description: "unregister chat"},
+		})
 		if err != nil {
-			b.logger.Error(fmt.Sprintf("can't send message: %v", err))
+			b.logger.Error("requested commands setup", slog.String("error", err.Error()), slog.Int("responseCode", respCode))
+		}
+	}
+
+	updates := b.tgAPI.GetMessagesChan()
+
+	defer b.stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Info("ctx done", slog.String("err", ctx.Err().Error()))
+			return
+
+		case update, ok := <-updates:
+			if !ok {
+				b.logger.Info("telegram message channel closed")
+				return
+			}
+
+			if !update.IsMessage {
+				b.logger.Warn("received unsupported message type")
+				continue
+			}
+
+			reply := b.handleMessage(ctx, update.Message, update.ChatID)
+
+			if err := b.tgAPI.SendMessage(update.ChatID, reply); err != nil {
+				b.logger.Error("send message", slog.String("error", err.Error()))
+			}
 		}
 	}
 }
 
-func (b *Bot) SendUpdate(updateInput SendUpdateInput) error {
+func (b *Bot) SendUpdate(updateInput SendUpdateInput) {
 	for _, chatID := range updateInput.TgChatIDs {
-		err := b.tgAPI.SendMessage(chatID, fmt.Sprintf("update to link %q: %v", updateInput.URL, updateInput.Description))
+		err := b.tgAPI.SendMessage(chatID, fmt.Sprintf("update to link %q:\n%v", updateInput.URL, updateInput.Description))
 		if err != nil {
-			fmt.Printf("can't send update %#v\n", updateInput)
+			b.logger.Error("send update", slog.Int64("chatID", chatID), slog.String("error", err.Error()))
 		}
 	}
-	return nil
 }

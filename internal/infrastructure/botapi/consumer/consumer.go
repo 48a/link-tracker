@@ -3,18 +3,20 @@ package consumer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/IBM/sarama"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/kafkaconfig"
 )
 
-type consumer struct {
-	cg    sarama.ConsumerGroup
-	h     *handler
-	topic string
+type Consumer struct {
+	cg     sarama.ConsumerGroup
+	h      *Handler
+	topic  string
+	logger *slog.Logger
 }
 
-func NewConsumer(h *handler, kafkaBroker []string, kafkaUser, kafkaPassword, kafkaConsumerGroup, topic string) (consumer, error) {
+func NewConsumer(h *Handler, kafkaBroker []string, kafkaUser, kafkaPassword, kafkaConsumerGroup, topic string, logger *slog.Logger) (Consumer, error) {
 	cfg := kafkaconfig.NewConfig(kafkaUser, kafkaPassword)
 
 	consumerGroup, err := sarama.NewConsumerGroup(
@@ -23,16 +25,22 @@ func NewConsumer(h *handler, kafkaBroker []string, kafkaUser, kafkaPassword, kaf
 		cfg,
 	)
 	if err != nil {
-		return consumer{}, fmt.Errorf("create consumer: %w", err)
+		return Consumer{}, fmt.Errorf("create consumer: %w", err)
 	}
 
-	return consumer{cg: consumerGroup, h: h, topic: topic}, nil
+	return Consumer{cg: consumerGroup, h: h, topic: topic}, nil
 }
 
-func (c consumer) Serve(ctx context.Context) {
+func (c Consumer) Serve(ctx context.Context) {
+	defer func() {
+		if err := c.cg.Close(); err != nil {
+			c.logger.Error("close consumer", slog.String("error", err.Error()))
+		}
+	}()
+
 	for {
 		if err := c.cg.Consume(ctx, []string{c.topic}, c.h); err != nil {
-			fmt.Println("Consume error", err)
+			c.logger.Error("consume", slog.String("error", err.Error()))
 			return
 		}
 
@@ -42,6 +50,6 @@ func (c consumer) Serve(ctx context.Context) {
 	}
 }
 
-func (c consumer) Close() error {
+func (c Consumer) Close() error {
 	return c.cg.Close()
 }

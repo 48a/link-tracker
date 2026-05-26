@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
@@ -16,10 +17,11 @@ import (
 )
 
 type linkStorage struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	timeout time.Duration
 }
 
-func NewLinkStorage(dsn string) (*linkStorage, error) {
+func NewLinkStorage(dsn string, timeout time.Duration, migrations string) (*linkStorage, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -35,7 +37,7 @@ func NewLinkStorage(dsn string) (*linkStorage, error) {
 		return nil, fmt.Errorf("driver: %w", err)
 	}
 
-	m, err := migrate.NewWithDatabaseInstance("file:///app/migrations", "postgres", driver)
+	m, err := migrate.NewWithDatabaseInstance(migrations, "postgres", driver)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -50,12 +52,16 @@ func NewLinkStorage(dsn string) (*linkStorage, error) {
 	}
 
 	return &linkStorage{
-		pool: pool,
+		pool:    pool,
+		timeout: timeout,
 	}, nil
 }
 
-func (ls *linkStorage) RegisterChat(chatID int64) error {
-	_, err := ls.pool.Exec(context.Background(), `insert into chats(chat_id) values ($1)`, chatID)
+func (ls *linkStorage) RegisterChat(ctx context.Context, chatID int64) error {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
+	_, err := ls.pool.Exec(ctx, `insert into chats(chat_id) values ($1)`, chatID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return domain.ErrChatAlreadyExist{}
@@ -67,9 +73,12 @@ func (ls *linkStorage) RegisterChat(chatID int64) error {
 	return nil
 }
 
-func (ls *linkStorage) DeleteChat(chatID int64) error {
+func (ls *linkStorage) DeleteChat(ctx context.Context, chatID int64) error {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
 	var deletedID int64
-	err := ls.pool.QueryRow(context.Background(), `delete from chats where chat_id = $1 returning chat_id`, chatID).Scan(&deletedID)
+	err := ls.pool.QueryRow(ctx, `delete from chats where chat_id = $1 returning chat_id`, chatID).Scan(&deletedID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrChatNotExist{}
 	}
@@ -80,8 +89,11 @@ func (ls *linkStorage) DeleteChat(chatID int64) error {
 	return nil
 }
 
-func (ls *linkStorage) GetAllLinks() ([]Link, error) {
-	return ls.getLinksByQuery(`
+func (ls *linkStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
+	return ls.getLinksByQuery(ctx, `
 		with chats_tags as (
 			select
 				cl.chat_id, cl.link_id, coalesce(array_agg(t.tag) filter (where t.tag is not null), '{}') as list_tags
@@ -100,8 +112,11 @@ func (ls *linkStorage) GetAllLinks() ([]Link, error) {
 	`)
 }
 
-func (ls *linkStorage) GetLinks(chatID int64) ([]Link, error) {
-	return ls.getLinksByQuery(`
+func (ls *linkStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, error) {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
+	return ls.getLinksByQuery(ctx, `
 		with chats_tags as (
 		select
 				cl.chat_id,
@@ -129,12 +144,11 @@ func (ls *linkStorage) GetLinks(chatID int64) ([]Link, error) {
 		chatID)
 }
 
-func (ls *linkStorage) getLinksByQuery(query string, args ...any) ([]Link, error) {
-	rows, err := ls.pool.Query(context.Background(), query, args...)
+func (ls *linkStorage) getLinksByQuery(ctx context.Context, query string, args ...any) ([]Link, error) {
+	rows, err := ls.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
-
 	defer rows.Close()
 
 	result := make([]Link, 0)
@@ -145,7 +159,6 @@ func (ls *linkStorage) getLinksByQuery(query string, args ...any) ([]Link, error
 		if err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
-
 		result = append(result, link)
 	}
 	if err = rows.Err(); err != nil {
@@ -155,8 +168,9 @@ func (ls *linkStorage) getLinksByQuery(query string, args ...any) ([]Link, error
 	return result, nil
 }
 
-func (ls *linkStorage) AddLink(chatID int64, request AddLinkInput) (_ Link, err error) {
-	ctx := context.Background()
+func (ls *linkStorage) AddLink(ctx context.Context, chatID int64, request AddLinkInput) (_ Link, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
 
 	tx, err := ls.pool.Begin(ctx)
 	if err != nil {
@@ -213,8 +227,9 @@ func (ls *linkStorage) AddLink(chatID int64, request AddLinkInput) (_ Link, err 
 	return link, nil
 }
 
-func (ls *linkStorage) DeleteLink(chatID int64, request DeleteLinkInput) (_ Link, err error) {
-	ctx := context.Background()
+func (ls *linkStorage) DeleteLink(ctx context.Context, chatID int64, request DeleteLinkInput) (_ Link, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
 
 	tx, err := ls.pool.Begin(ctx)
 	if err != nil {
@@ -291,6 +306,64 @@ func (ls *linkStorage) DeleteLink(chatID int64, request DeleteLinkInput) (_ Link
 	return link, nil
 }
 
-func (ls linkStorage) Close() {
+func (ls *linkStorage) GetLastUpdated(ctx context.Context, linkID int) (time.Time, error) {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
+	row := ls.pool.QueryRow(ctx, "select last_updated from links where id = $1;", linkID)
+
+	var result time.Time
+	err := row.Scan(&result)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("scan: %w", err)
+	}
+
+	return result, nil
+}
+
+func (ls *linkStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
+	row := ls.pool.QueryRow(
+		ctx,
+		`select
+			array_agg(cl.chat_id)
+		from
+			chats_links cl
+		group by
+			cl.link_id
+		having
+			cl.link_id = $1;`, linkID)
+
+	var result []int64
+	err := row.Scan(&result)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return []int64{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan: %w", err)
+	}
+
+	return result, nil
+}
+
+func (ls *linkStorage) SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
+	defer cancel()
+
+	result, err := ls.pool.Exec(ctx, "update links set last_updated = $1 where id = $2;", lastUpdated, linkID)
+	if err != nil {
+		return fmt.Errorf("update error: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("link with id %d not found", linkID)
+	}
+
+	return nil
+}
+
+func (ls *linkStorage) Close() {
 	ls.pool.Close()
 }

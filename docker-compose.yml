@@ -28,6 +28,27 @@ services:
       timeout: 10s
       retries: 10
       start_period: 10s
+    volumes:
+      - kafka_data:/bitnami/kafka
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: schema-registry
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:9094'
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: PLAINTEXT
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   init-kafka:
     image: 'docker.io/bitnamilegacy/kafka:4.0.0'
@@ -44,39 +65,133 @@ services:
 
   postgres:
     image:
-      postgres:latest
+      postgres:17
+    ports:
+      - '5432:5432'
     environment:
-      POSTGRES_USER: ${DB_USERNAME}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_SCRAPPER_USERNAME}
+      POSTGRES_PASSWORD: ${DB_SCRAPPER_PASSWORD}
+      POSTGRES_DB: ${DB_SCRAPPER_NAME}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_SCRAPPER_USERNAME} -d ${DB_SCRAPPER_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  postgres-1:
+    image:
+      postgres:17
+    ports:
+      - '5433:5433'
+    command: ["postgres", "-p", "5433"]
+    environment:
+      POSTGRES_USER: ${DB_BOT_USERNAME}
+      POSTGRES_PASSWORD: ${DB_BOT_PASSWORD}
+      POSTGRES_DB: ${DB_BOT_NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_BOT_USERNAME} -d ${DB_BOT_NAME} -p 5433"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_1_data:/var/lib/postgresql/data
+
+  valkey:
+    image: valkey/valkey:latest
+    container_name: valkey
+    ports:
+      - "6379:6379"
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD}"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - valkey_data:/data
 
   bot:
     build:
       context: .
       dockerfile: Dockerfile.bot
     environment:
+      DB_BOT_HOST: ${DB_BOT_HOST}
+      DB_BOT_PORT: ${DB_BOT_PORT}
+      DB_BOT_USERNAME: ${DB_BOT_USERNAME}
+      DB_BOT_PASSWORD: ${DB_BOT_PASSWORD}
+      DB_BOT_NAME: ${DB_BOT_NAME}
+
       APP_TELEGRAM_TOKEN: ${APP_TELEGRAM_TOKEN}
+
+      KAFKA_USER: ${KAFKA_USER}
+      KAFKA_PASSWORD: ${KAFKA_PASSWORD}
+      KAFKA_TOPIC: ${KAFKA_TOPIC}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+
+      BOT_COMMUNICATION_TYPE: ${BOT_COMMUNICATION_TYPE}
+
+      SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+
+      SCRAPPER_CLIENT_TIMEOUT: ${SCRAPPER_CLIENT_TIMEOUT}
+      SCRAPPER_CLIENT_RETRY_ATTEMPTS: ${SCRAPPER_CLIENT_RETRY_ATTEMPTS}
+      SCRAPPER_CLIENT_RETRY_DELAY: ${SCRAPPER_CLIENT_RETRY_DELAY}
+      SCRAPPER_CLIENT_CB_RATIO_THRESHOLD: ${SCRAPPER_CLIENT_CB_RATIO_THRESHOLD}
+      SCRAPPER_CLIENT_CB_MIN_REQUESTS: ${SCRAPPER_CLIENT_CB_MIN_REQUESTS}
+      SCRAPPER_CLIENT_CB_OPEN_WINDOW: ${SCRAPPER_CLIENT_CB_OPEN_WINDOW}
+
     ports:
       - "8002:8002"
     depends_on:
+      postgres-1:
+        condition: service_healthy
       init-kafka:
         condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
+
+    restart: "on-failure:3"
 
   scrapper:
     build:
       context: .
       dockerfile: Dockerfile.scrapper
     environment:
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
+      KAFKA_USER: ${KAFKA_USER}
+      KAFKA_PASSWORD: ${KAFKA_PASSWORD}
+      KAFKA_TOPIC: ${KAFKA_TOPIC}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+
+      DB_SCRAPPER_HOST: ${DB_SCRAPPER_HOST}
+      DB_SCRAPPER_PORT: ${DB_SCRAPPER_PORT}
+      DB_SCRAPPER_USERNAME: ${DB_SCRAPPER_USERNAME}
+      DB_SCRAPPER_PASSWORD: ${DB_SCRAPPER_PASSWORD}
+      DB_SCRAPPER_NAME: ${DB_SCRAPPER_NAME}
+      DB_SCRAPPER_ACCESS_TYPE: ${DB_SCRAPPER_ACCESS_TYPE}
+
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      STACKOVERFLOW_TOKEN: ${STACKOVERFLOW_TOKEN}
+
+      SCRAPPER_GITHUB_TIMEOUT: ${SCRAPPER_GITHUB_TIMEOUT}
+      SCRAPPER_STACKOVERFLOW_TIMEOUT: ${SCRAPPER_STACKOVERFLOW_TIMEOUT}
+
+      VALKEY_HOST: ${VALKEY_HOST}
+      VALKEY_PORT: ${VALKEY_PORT}
+      VALKEY_USERNAME: ${VALKEY_USERNAME}
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+
+      VALKEY_CACHE_TTL: ${VALKEY_CACHE_TTL}
+      VALKEY_TIMEOUT: ${VALKEY_TIMEOUT}
+
+      JOB_DURATION: ${JOB_DURATION}
+      BOT_COMMUNICATION_TYPE: ${BOT_COMMUNICATION_TYPE}
+
+      CACHE: ${CACHE}
+
+      SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
     ports:
       - "8001:8001"
     depends_on:
@@ -84,3 +199,12 @@ services:
         condition: service_healthy
       init-kafka:
         condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
+
+
+volumes:
+  kafka_data:
+  postgres_data:
+  postgres_1_data:
+  valkey_data:

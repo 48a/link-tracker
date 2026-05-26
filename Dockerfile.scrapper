@@ -11,7 +11,7 @@ FROM alpine:latest
 WORKDIR /app
 
 COPY --from=build /out/scrapper /app
-COPY --from=build /src/migrations /app/migrations
+COPY --from=build /src/migrations/scrapper /app/migrations
 
 EXPOSE 8001
 

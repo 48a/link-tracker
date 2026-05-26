@@ -1,6 +1,9 @@
 package tgapi
 
 import (
+	"net/http"
+	"os"
+
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -10,19 +13,26 @@ type TgAPI struct {
 
 type Update struct {
 	IsMessage bool
-	Message string
-	ChatID int64
+	Message   string
+	ChatID    int64
 }
 
 type Commands struct {
-	Command string
+	Command     string
 	Description string
 }
 
 func NewTgApi(token string) (TgAPI, error) {
 	res := TgAPI{}
 	var err error
-	res.bot, err = tgbotapi.NewBotAPI(token)
+
+	apiEndpoint := os.Getenv("TG_API_BASE_URL")
+	if apiEndpoint != "" {
+		res.bot, err = tgbotapi.NewBotAPIWithClient(token, apiEndpoint+"/bot%s/%s", &http.Client{})
+	} else {
+		res.bot, err = tgbotapi.NewBotAPI(token)
+	}
+
 	if err != nil {
 		return TgAPI{}, err
 	}
@@ -62,7 +72,7 @@ func (t TgAPI) GetMessagesChan() <-chan Update {
 }
 
 func (t TgAPI) SendMessage(chatID int64, message string) error {
-	msg := tgbotapi.NewMessage(chatID, message)
+	msg := tgbotapi.NewMessage(chatID, message[:min(len(message), 4090)])
 	_, err := t.bot.Send(msg)
 	return err
 }

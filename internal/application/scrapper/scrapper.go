@@ -1,65 +1,120 @@
 package scrapper
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/botapi"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/common/linkkind"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/githubfetcher"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/linkstorage"
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/stackoverflowfetcher"
 )
 
-type linkStorage interface {
-	RegisterChat(chatID int64) error
-	DeleteChat(chatID int64) error
-	GetLinks(chatID int64) ([]linkstorage.Link, error)
-	AddLink(chatID int64, request linkstorage.AddLinkInput) (linkstorage.Link, error)
-	DeleteLink(chatID int64, request linkstorage.DeleteLinkInput) (linkstorage.Link, error)
-	GetAllLinks() ([]linkstorage.Link, error)
-	// Close()
+type LinkStorage interface {
+	RegisterChat(ctx context.Context, chatID int64) error
+	DeleteChat(ctx context.Context, chatID int64) error
+	GetLinks(ctx context.Context, chatID int64) ([]linkstorage.Link, error)
+	AddLink(ctx context.Context, chatID int64, request linkstorage.AddLinkInput) (linkstorage.Link, error)
+	DeleteLink(ctx context.Context, chatID int64, request linkstorage.DeleteLinkInput) (linkstorage.Link, error)
+	GetAllLinks(ctx context.Context) ([]linkstorage.Link, error)
+	GetLastUpdated(ctx context.Context, linkID int) (time.Time, error)
+	GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error)
+	SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error
+	Close()
 }
 
-type botClient interface {
+type BotClient interface {
 	SendUpdate(linkUpdate botapi.LinkUpdate) error
 }
 
-type service struct {
-	logger    *slog.Logger
-	storage   linkStorage
-	client    botClient
-	scheduler gocron.Scheduler
-	jobs      map[int]gocron.Job
+type githubFetcher interface {
+	FetchUpdates(repoURL string, since time.Time) ([]githubfetcher.UpdateInfo, error)
 }
 
-func NewService(logger *slog.Logger, client botClient, storage linkStorage) (*service, error) {
+type stackoverflowFetcher interface {
+	FetchUpdates(questionURL string, since time.Time) (*stackoverflowfetcher.QuestionUpdates, error)
+}
+
+type LinksCache interface {
+	GetLinks(ctx context.Context, chatID int64) ([]domain.Link, error)
+	SetLinks(ctx context.Context, chatID int64, links []domain.Link) error
+	Invalidate(ctx context.Context, chatID int64) error
+}
+
+type ChatLocker struct {
+	shards [256]sync.Mutex
+}
+
+func NewChatLocker() *ChatLocker {
+	return &ChatLocker{}
+}
+
+func (l *ChatLocker) Lock(chatID int64) func() {
+	idx := uint64(chatID) % 256
+	l.shards[idx].Lock()
+	return l.shards[idx].Unlock
+}
+
+type service struct {
+	logger        *slog.Logger
+	storage       LinkStorage
+	client        BotClient
+	scheduler     gocron.Scheduler
+	jobs          map[int]gocron.Job
+	githubFetcher githubFetcher
+	sofetcher     stackoverflowFetcher
+	cache         LinksCache
+	jobDuration   int
+	locker        *ChatLocker
+}
+
+func NewService(logger *slog.Logger, client BotClient, storage LinkStorage, githubFetcher githubFetcher, sofetcher stackoverflowFetcher, cache LinksCache, jobDuration int) (*service, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return &service{}, err
 	}
+
 	s.Start()
-	return &service{logger: logger, storage: storage, client: client, scheduler: s, jobs: make(map[int]gocron.Job)}, nil
+	return &service{logger: logger, storage: storage, client: client, scheduler: s, jobs: make(map[int]gocron.Job), githubFetcher: githubFetcher, sofetcher: sofetcher, cache: cache, jobDuration: jobDuration, locker: NewChatLocker()}, nil
 }
 
 func (s *service) loadJob(link domain.Link, linkID int) error {
-	fmt.Printf("got job user: %v\n", link.ID)
+	s.logger.Info("load job", slog.Int64("chatID", link.ID), slog.String("url", link.URL), slog.String("tags", strings.Join(link.Tags, ",")), slog.Int("linkID", linkID))
+
+	var runJob func()
+
+	switch linkkind.Kind(link.URL) {
+	case "github":
+		runJob = func() {
+			s.process(link, linkID, s.buildUpdateGithub)
+		}
+
+	case "stackoverflow":
+		runJob = func() {
+			s.process(link, linkID, s.buildUpdateStackoverflow)
+		}
+
+	default:
+		return fmt.Errorf("invalid link")
+	}
+
 	j, err := s.scheduler.NewJob(
 		gocron.DurationJob(
-			30*time.Second,
+			time.Duration(s.jobDuration)*time.Second,
 		),
 		gocron.NewTask(
-			s.client.SendUpdate,
-			botapi.LinkUpdate{
-				ID:          link.ID,
-				URL:         link.URL,
-				Description: "update test every 30 sec",
-				TgChatIDs:   []int64{link.ID},
-			},
+			runJob,
 		),
 	)
 	if err != nil {
+		s.logger.Error("new job", slog.Int("linkID", linkID), slog.String("error", err.Error()))
 		return err
 	}
 
@@ -68,13 +123,16 @@ func (s *service) loadJob(link domain.Link, linkID int) error {
 }
 
 func (s *service) unloadJob(linkID int) error {
+	s.logger.Info("unload job", slog.Int("linkID", linkID))
+
 	j, has := s.jobs[linkID]
 	if !has {
+		s.logger.Error("find job to unload", slog.String("error", "no such job"), slog.Int("linkID", linkID))
 		return ErrNoSuchJob
 	}
 
-	err := s.scheduler.RemoveJob(j.ID())
-	if err != nil {
+	if err := s.scheduler.RemoveJob(j.ID()); err != nil {
+		s.logger.Error("scheduler remove job", slog.String("error", err.Error()), slog.Int("linkID", linkID))
 		return err
 	}
 
@@ -83,94 +141,164 @@ func (s *service) unloadJob(linkID int) error {
 }
 
 func (s *service) LoadAllLinks() error {
-	links, err := s.storage.GetAllLinks()
+	links, err := s.storage.GetAllLinks(context.Background())
 	if err != nil {
+		s.logger.Error("storage get all links", slog.String("error", err.Error()))
 		return err
 	}
 
 	for _, link := range links {
-		fmt.Printf("got link %#v\n", link)
-		err = errors.Join(err, s.loadJob(domain.Link{
+		if err = s.loadJob(domain.Link{
 			ID:   link.ChatID,
 			URL:  link.URL,
 			Tags: link.Tags,
-		}, link.LinkID))
+		}, link.LinkID); err != nil {
+			s.logger.Error("load job at start up", slog.String("error", err.Error()))
+		}
+
 	}
-	return err
+	return nil
 }
 
 func (s *service) RegisterChat(chatID int64) error {
-	return s.storage.RegisterChat(chatID)
+	unlock := s.locker.Lock(chatID)
+	defer unlock()
+
+	return s.storage.RegisterChat(context.Background(), chatID)
 }
 
 func (s *service) DeleteChat(chatID int64) error {
+	unlock := s.locker.Lock(chatID)
+	defer unlock()
+
 	var err error
-	links, err := s.storage.GetLinks(chatID)
+	links, err := s.storage.GetLinks(context.Background(), chatID)
 	if err != nil {
+		s.logger.Error("storage get links", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
 		return err
 	}
+
 	for _, link := range links {
-		err = errors.Join(err, s.unloadJob(link.LinkID))
+		err = s.unloadJob(link.LinkID)
+		if err != nil {
+			s.logger.Error("unload job", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
+		}
 	}
-	err = errors.Join(err, s.storage.DeleteChat(chatID))
-	return err
+
+	err = s.storage.DeleteChat(context.Background(), chatID)
+	if err != nil {
+		s.logger.Error("delete chat", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
+	}
+
+	if err == nil && s.cache != nil {
+		if err2 := s.cache.Invalidate(context.Background(), chatID); err2 != nil {
+			s.logger.Error("can't invalidate cache", slog.String("error", err2.Error()), slog.Int64("chatID", chatID))
+		}
+	}
+
+	return nil
 }
 
 func (s *service) GetLinks(chatID int64) ([]domain.Link, error) {
-	links, err := s.storage.GetLinks(chatID)
+	unlock := s.locker.Lock(chatID)
+	defer unlock()
+
+	ctx := context.Background()
+
+	if s.cache != nil {
+		cachedLinks, err := s.cache.GetLinks(ctx, chatID)
+		if err == nil && cachedLinks != nil {
+			s.logger.Info("cache hit for links", slog.Int64("chatID", chatID))
+			return cachedLinks, nil
+		}
+	}
+
+	links, err := s.storage.GetLinks(context.Background(), chatID)
 	if err != nil {
+		s.logger.Error("storage get links", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
 		return []domain.Link{}, err
 	}
 
 	result := make([]domain.Link, len(links))
 	for i, link := range links {
-		result[i] = domain.Link{ID: link.ChatID, URL: link.URL, Tags: link.Tags}
+		result[i] = domain.Link{ID: int64(link.LinkID), URL: link.URL, Tags: link.Tags}
 	}
+
+	if s.cache != nil {
+		if err := s.cache.SetLinks(ctx, chatID, result); err != nil {
+			s.logger.Error("can't set cache", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
+		}
+	}
+
 	return result, nil
 }
 
 func (s *service) AddLink(chatID int64, request AddLinkInput) (domain.Link, error) {
-	link, err := s.storage.AddLink(chatID, linkstorage.AddLinkInput{
+	unlock := s.locker.Lock(chatID)
+	defer unlock()
+
+	link, err := s.storage.AddLink(context.Background(), chatID, linkstorage.AddLinkInput{
 		URL:         request.URL,
 		Tags:        request.Tags,
 		LastUpdated: time.Now(),
 	})
 	if err != nil {
+		s.logger.Error("storage add link", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.String("request", fmt.Sprintf("%#v", request)))
 		return domain.Link{}, err
 	}
 
-	err = s.loadJob(domain.Link{
-		ID:   link.ChatID,
-		URL:  link.URL,
-		Tags: link.Tags,
-	}, link.LinkID)
-	if err != nil {
-		return domain.Link{}, err
+	if s.cache != nil {
+		if err := s.cache.Invalidate(context.Background(), chatID); err != nil {
+			s.logger.Error("can't invalidate cache", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
+		}
 	}
 
-	return domain.Link{
+	added := domain.Link{
 		ID:   link.ChatID,
 		URL:  link.URL,
 		Tags: link.Tags,
-	}, nil
+	}
+
+	if err = s.loadJob(added, link.LinkID); err != nil {
+		s.logger.Error("load job", slog.String("error", err.Error()))
+		return added, nil
+	}
+
+	return added, nil
 }
 
 func (s *service) DeleteLink(chatID int64, request DeleteLinkInput) (domain.Link, error) {
-	link, err := s.storage.DeleteLink(chatID, linkstorage.DeleteLinkInput{
+	unlock := s.locker.Lock(chatID)
+	defer unlock()
+
+	link, err := s.storage.DeleteLink(context.Background(), chatID, linkstorage.DeleteLinkInput{
 		URL: request.URL,
 	})
 	if err != nil {
+		s.logger.Error("storage delete link", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.String("link", fmt.Sprintf("%#v", link)))
 		return domain.Link{}, err
 	}
 
-	err = s.unloadJob(link.LinkID)
-	if err != nil {
-		return domain.Link{}, err
+	if s.cache != nil {
+		if err := s.cache.Invalidate(context.Background(), chatID); err != nil {
+			s.logger.Error("can't invalidate cache", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
+		}
 	}
 
-	return domain.Link{
-		ID:   link.ChatID,
+	deleted := domain.Link{
+		ID:   int64(link.LinkID),
 		URL:  link.URL,
 		Tags: link.Tags,
-	}, nil
+	}
+
+	if err = s.unloadJob(link.LinkID); err != nil {
+		s.logger.Error("unload job", slog.String("error", err.Error()), slog.Int("linkID", link.LinkID))
+		return deleted, nil
+	}
+
+	return deleted, nil
+}
+
+func (s *service) Stop() {
+	s.storage.Close()
 }

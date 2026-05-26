@@ -15,7 +15,7 @@ create table if not exists chats_links (
 	unique (chat_id, link_id)
 );
 
-create table if not exists  tags (
+create table if not exists tags (
 	tag text constraint tag_length_check check (char_length(tag) < 56692),
 	sub_id integer references chats_links(id) on delete cascade,
 	primary key (sub_id, tag)

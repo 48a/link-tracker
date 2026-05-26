@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 )
@@ -28,4 +29,8 @@ func NewServer(baseURL string, h *handler) server {
 
 func (s server) Run() error {
 	return s.srv.ListenAndServe()
+}
+
+func (s server) Stop(ctx context.Context) error {
+	return s.srv.Shutdown(ctx)
 }

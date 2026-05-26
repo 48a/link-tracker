@@ -12,43 +12,35 @@ import (
 )
 
 type service interface {
-	SendUpdate(sendUpdateInput bot.SendUpdateInput) error
+	SendUpdate(sendUpdateInput bot.SendUpdateInput)
 }
 
-type handler struct {
+type Handler struct {
 	svc service
 }
 
-func NewHandler(svc service) *handler {
-	return &handler{svc: svc}
+func NewHandler(svc service) *Handler {
+	return &Handler{svc: svc}
 }
 
-func (h *handler) SendUpdate(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) SendUpdate(w http.ResponseWriter, r *http.Request) {
 	sendUpdate := botapi.LinkUpdate{}
 	ok := h.readBody(w, r.Body, &sendUpdate)
 	if !ok {
 		return
 	}
 
-	err := h.svc.SendUpdate(bot.SendUpdateInput{
+	h.svc.SendUpdate(bot.SendUpdateInput{
 		ID:          sendUpdate.ID,
 		URL:         sendUpdate.URL,
 		Description: sendUpdate.Description,
 		TgChatIDs:   sendUpdate.TgChatIDs,
 	})
-	if err != nil {
-		h.response(w, 500, botapi.ApiErrorResponse{
-			Description:      "tg api can't send link update",
-			Code:             "500",
-			ExceptionMessage: err.Error(),
-		})
-		return
-	}
 
 	h.response(w, http.StatusOK, []byte{})
 }
 
-func (h *handler) response(w http.ResponseWriter, httpStatus int, data any) {
+func (h *Handler) response(w http.ResponseWriter, httpStatus int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
 
@@ -58,7 +50,7 @@ func (h *handler) response(w http.ResponseWriter, httpStatus int, data any) {
 	}
 }
 
-func (h *handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) bool {
+func (h *Handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) bool {
 	requestBody, err := io.ReadAll(body)
 	if err != nil {
 		h.response(w, http.StatusInternalServerError, setApiErrorCode(botapi.ApiErrorResponse{

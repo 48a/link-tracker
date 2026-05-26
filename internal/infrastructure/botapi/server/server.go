@@ -1,19 +1,20 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 )
 
-type server struct {
+type Server struct {
 	srv *http.Server
 }
 
-func NewServer(baseURL string, h *handler) server {
+func NewServer(baseURL string, h *Handler) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /updates", h.SendUpdate)
 
-	return server{srv: &http.Server{
+	return &Server{srv: &http.Server{
 		Addr:         baseURL,
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
@@ -22,6 +23,10 @@ func NewServer(baseURL string, h *handler) server {
 	}}
 }
 
-func (s server) Run() error {
+func (s *Server) Run() error {
 	return s.srv.ListenAndServe()
+}
+
+func (s *Server) Stop(ctx context.Context) {
+	s.srv.Shutdown(ctx)
 }

@@ -1,10 +1,5 @@
 package userstorage
 
-type Request struct {
-	URL  string
-	Tags []string
-}
-
 type userStorage struct {
 	chatState    map[int64]int
 	requestState map[int64]Request

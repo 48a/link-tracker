@@ -3,8 +3,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -22,11 +22,12 @@ type service interface {
 }
 
 type handler struct {
-	svc service
+	svc    service
+	logger *slog.Logger
 }
 
-func NewHandler(svc service) *handler {
-	return &handler{svc: svc}
+func NewHandler(svc service, logger *slog.Logger) *handler {
+	return &handler{svc: svc, logger: logger}
 }
 
 func (h *handler) RegisterChat(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +134,7 @@ func (h *handler) AddLink(w http.ResponseWriter, r *http.Request) {
 		URL:  addRequest.URL,
 		Tags: addRequest.Tags,
 	})
+
 	if err != nil {
 		if errors.As(err, new(domain.ErrChatNotExist)) {
 			h.response(w, http.StatusNotFound, setApiErrorCode(scrapperapi.ApiErrorResponse{
@@ -201,7 +203,7 @@ func (h *handler) response(w http.ResponseWriter, httpStatus int, data any) {
 
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {
-		fmt.Println("failed to marshal response, better logging soon")
+		h.logger.Error("marshal response", slog.String("error", err.Error()))
 	}
 }
 
