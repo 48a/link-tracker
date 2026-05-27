@@ -315,7 +315,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 
 	go func() {
 		for {
-			if err = consumerGroup.Consume(agentCtx, []string{"link.raw-updates"}, worker); err != nil {
+			if consumeErr := consumerGroup.Consume(agentCtx, []string{"link.raw-updates"}, worker); consumeErr != nil {
 				return
 			}
 			if agentCtx.Err() != nil {
@@ -332,7 +332,14 @@ func TestAgentKafkaIntegration(t *testing.T) {
 
 	time.Sleep(3 * time.Second)
 
-	partConsumer, err := testConsumer.ConsumePartition("link.processed-updates", 0, sarama.OffsetNewest)
+	var partConsumer sarama.PartitionConsumer
+	for i := 0; i < 10; i++ {
+		partConsumer, err = testConsumer.ConsumePartition("link.processed-updates", 0, sarama.OffsetOldest)
+		if err == nil {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
 	if err != nil {
 		t.Fatalf("consume partition: %v", err)
 	}
