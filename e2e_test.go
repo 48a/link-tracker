@@ -99,7 +99,7 @@ func TestE2EFlow(t *testing.T) {
 	defer netw.Remove(ctx)
 
 	scrapperDBReq := testcontainers.ContainerRequest{
-		Image:        "library/postgres:17",
+		Image:        "postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -120,7 +120,7 @@ func TestE2EFlow(t *testing.T) {
 	defer scrapperDB.Terminate(ctx)
 
 	botDBReq := testcontainers.ContainerRequest{
-		Image:        "library/postgres:17",
+		Image:        "postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -388,7 +388,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	*/
 
 	scrapperDBReq := testcontainers.ContainerRequest{
-		Image:        "library/postgres:17",
+		Image:        "postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -409,7 +409,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	defer scrapperDB.Terminate(ctx)
 
 	botDBReq := testcontainers.ContainerRequest{
-		Image:        "library/postgres:17",
+		Image:        "postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
