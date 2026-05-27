@@ -23,9 +23,8 @@ lint:
   rules:
     - when: always
 
-test:
+.test-base:
   stage: test
-  timeout: 20m
   image: ${GOLANG_IMAGE}
   tags:
     - dind
@@ -44,9 +43,7 @@ test:
     - tar xzvf docker-24.0.9.tgz
     - mv docker/docker /usr/bin/docker
     - rm -rf docker docker-24.0.9.tgz
-
     - echo "$CI_JOB_TOKEN" | docker login gitlab.education.tbank.ru:443 -u gitlab-ci-token --password-stdin
-
     - |
       (docker pull ${GITLAB_DOCKER_PROXY}/postgres:17 && docker tag ${GITLAB_DOCKER_PROXY}/postgres:17 postgres:17) &
       (docker pull ${GITLAB_DOCKER_PROXY}/postgres:15-alpine && docker tag ${GITLAB_DOCKER_PROXY}/postgres:15-alpine postgres:15-alpine) &
@@ -54,16 +51,38 @@ test:
       (docker pull ${GITLAB_DOCKER_PROXY}/confluentinc/cp-schema-registry:7.5.0 && docker tag ${GITLAB_DOCKER_PROXY}/confluentinc/cp-schema-registry:7.5.0 confluentinc/cp-schema-registry:7.5.0) &
       (docker pull ${GITLAB_DOCKER_PROXY}/confluentinc/confluent-local:7.5.0 && docker tag ${GITLAB_DOCKER_PROXY}/confluentinc/confluent-local:7.5.0 confluentinc/confluent-local:7.5.0) &
       (docker pull ${GITLAB_DOCKER_PROXY}/valkey/valkey:latest && docker tag ${GITLAB_DOCKER_PROXY}/valkey/valkey:latest valkey/valkey:latest) &
-      
       wait
- 
-  script:
     - apk add --no-cache gcc musl-dev
-    - go test -race -coverprofile=coverage.out ./...
-    - go tool cover -func=coverage.out
-  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
   rules:
     - when: always
+
+test_e2e_flow:
+  extends: .test-base
+  script:
+    - go test -race -run ^TestE2EFlow$ -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
+
+test_scrapper_kafka_bot:
+  extends: .test-base
+  script:
+    - go test -race -run ^TestScrapperKafkaBotFlow$ -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
+
+test_agent_kafka:
+  extends: .test-base
+  script:
+    - go test -race -run ^TestAgentKafkaIntegration$ -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
+
+test_unit:
+  extends: .test-base
+  script:
+    - go test -race -skip "^(TestE2EFlow|TestScrapperKafkaBotFlow|TestAgentKafkaIntegration)$" -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
 
 build:
   stage: build
