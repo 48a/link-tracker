@@ -25,6 +25,7 @@ lint:
 
 test:
   stage: test
+  timeout: 20m
   image: ${GOLANG_IMAGE}
   tags:
     - dind
