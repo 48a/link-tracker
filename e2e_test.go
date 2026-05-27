@@ -18,10 +18,10 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/agent"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/agentkafka"
@@ -32,182 +32,66 @@ type tgSendMessageReq struct {
 	Text   string `json:"text"`
 }
 
-//nolint:gocognit
+type containerResult struct {
+	c   testcontainers.Container
+	err error
+}
+
+//nolint:tparallel // avoid data race
 func TestE2EFlow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	tgUpdates := make(chan string, 10)
 	tgReplies := make(chan tgSendMessageReq, 10)
+	var githubTriggered atomic.Bool
 
-	mockServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/botTEST_TOKEN/getMe" {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{
-				"ok": true,
-				"result": {
-					"id": 123456789,
-					"is_bot": true,
-					"first_name": "TestBot",
-					"username": "TestBot"
-				}
-			}`))
-			return
-		}
-
-		if r.URL.Path == "/botTEST_TOKEN/getUpdates" {
-			w.Header().Set("Content-Type", "application/json")
-			select {
-			case update := <-tgUpdates:
-				w.Write([]byte(update))
-			default:
-				w.Write([]byte(`{"ok": true, "result": []}`))
-			}
-			return
-		}
-
-		if r.URL.Path == "/botTEST_TOKEN/sendMessage" {
-			var req tgSendMessageReq
-
-			if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-				body, _ := io.ReadAll(r.Body)
-				_ = json.Unmarshal(body, &req)
-			} else {
-				_ = r.ParseForm()
-				req.ChatID, _ = strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
-				req.Text = r.FormValue("text")
-			}
-
-			tgReplies <- req
-
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok": true}`))
-			return
-		}
-
-		t.Logf("Mock server received unexpected request: %s %s", r.Method, r.URL.Path)
-	}))
-
-	l, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatalf("failed to listen on 0.0.0.0: %v", err)
-	}
-	mockServer.Listener.Close()
-	mockServer.Listener = l
-	mockServer.Start()
+	mockServer, internalMockURL := startMockServer(t, tgUpdates, tgReplies, &githubTriggered)
 	defer mockServer.Close()
-
-	mockServerPort := mockServer.Listener.Addr().(*net.TCPAddr).Port
-	internalMockURL := fmt.Sprintf("http://host.docker.internal:%d", mockServerPort)
 
 	netw, err := network.New(ctx)
 	if err != nil {
 		t.Fatalf("failed to create network: %v", err)
 	}
-	defer netw.Remove(ctx)
+	defer func() { _ = netw.Remove(ctx) }()
 
-	scrapperDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "user",
-			"POSTGRES_PASSWORD": "password",
-			"POSTGRES_DB":       "scrapper_db",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"postgres"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
-	}
-	scrapperDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: scrapperDBReq,
-		Started:          true,
+	dbScrapCh := asyncStart(func() (testcontainers.Container, error) {
+		return startPostgres(ctx, netw.Name, "postgres", "scrapper_db")
 	})
-	if err != nil {
-		t.Fatalf("failed to start scrapper db: %v", err)
-	}
-	defer scrapperDB.Terminate(ctx)
+	dbBotCh := asyncStart(func() (testcontainers.Container, error) {
+		return startPostgres(ctx, netw.Name, "postgres-1", "bot_db")
+	})
 
-	botDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "user",
-			"POSTGRES_PASSWORD": "password",
-			"POSTGRES_DB":       "bot_db",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"postgres-1"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
+	resScrap := <-dbScrapCh
+	if resScrap.err != nil {
+		t.Fatalf("failed to start scrapper db: %v", resScrap.err)
 	}
-	botDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: botDBReq,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("failed to start bot db: %v", err)
-	}
-	defer botDB.Terminate(ctx)
+	defer func() { _ = resScrap.c.Terminate(ctx) }()
 
-	scrapperReq := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    ".",
-			Dockerfile: "Dockerfile.scrapper",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"scrapper"}},
-		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
-		Env: map[string]string{
-			"DB_SCRAPPER_HOST":       "postgres",
-			"DB_SCRAPPER_PORT":       "5432",
-			"DB_SCRAPPER_USERNAME":   "user",
-			"DB_SCRAPPER_PASSWORD":   "password",
-			"DB_SCRAPPER_NAME":       "scrapper_db",
-			"BOT_COMMUNICATION_TYPE": "HTTP",
-			"CACHE":                  "FALSE",
-			"GITHUB_API_URL":         internalMockURL,
-			"STACKEXCHANGE_API_URL":  internalMockURL,
-		},
-		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
-			return status == http.StatusBadRequest || status == http.StatusOK
-		}).WithStartupTimeout(2 * time.Minute),
+	resBot := <-dbBotCh
+	if resBot.err != nil {
+		t.Fatalf("failed to start bot db: %v", resBot.err)
 	}
-	scrapperContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: scrapperReq,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("failed to start scrapper: %v", err)
-	}
-	defer scrapperContainer.Terminate(ctx)
+	defer func() { _ = resBot.c.Terminate(ctx) }()
 
-	botReq := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    ".",
-			Dockerfile: "Dockerfile.bot",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"bot"}},
-		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
-		Env: map[string]string{
-			"DB_BOT_HOST":            "postgres-1",
-			"DB_BOT_PORT":            "5432",
-			"DB_BOT_USERNAME":        "user",
-			"DB_BOT_PASSWORD":        "password",
-			"DB_BOT_NAME":            "bot_db",
-			"BOT_COMMUNICATION_TYPE": "HTTP",
-			"APP_TELEGRAM_TOKEN":     "TEST_TOKEN",
-			"SKIP_COMMANDS":          "TRUE",
-			"TG_API_BASE_URL":        internalMockURL,
-		},
-		WaitingFor: wait.ForLog("start polling").WithStartupTimeout(2 * time.Minute),
-	}
-	botContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: botReq,
-		Started:          true,
+	scrapperCh := asyncStart(func() (testcontainers.Container, error) {
+		return startScrapper(ctx, netw.Name, "postgres", internalMockURL, "HTTP", "", "")
 	})
-	if err != nil {
-		t.Fatalf("failed to start bot: %v", err)
+	botCh := asyncStart(func() (testcontainers.Container, error) {
+		return startBot(ctx, netw.Name, "postgres-1", internalMockURL, "HTTP", "", "")
+	})
+
+	resScrapper := <-scrapperCh
+	if resScrapper.err != nil {
+		t.Fatalf("failed to start scrapper: %v", resScrapper.err)
 	}
-	defer botContainer.Terminate(ctx)
+	defer func() { _ = resScrapper.c.Terminate(ctx) }()
+
+	resBotApp := <-botCh
+	if resBotApp.err != nil {
+		t.Fatalf("failed to start bot: %v", resBotApp.err)
+	}
+	defer func() { _ = resBotApp.c.Terminate(ctx) }()
 
 	chatID := int64(1001)
 
@@ -267,256 +151,75 @@ func TestE2EFlow(t *testing.T) {
 	})
 }
 
-//nolint:gocognit
+//nolint:tparallel // avoid data race
 func TestScrapperKafkaBotFlow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	tgUpdates := make(chan string, 10)
 	tgReplies := make(chan tgSendMessageReq, 10)
+	var githubTriggered atomic.Bool
 
-	var githubUpdatesTriggered atomic.Bool
-
-	mockServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/botTEST_TOKEN/getMe" {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok": true, "result": {"id": 123, "is_bot": true, "first_name": "Test", "username": "Test"}}`))
-			return
-		}
-
-		if r.URL.Path == "/botTEST_TOKEN/getUpdates" {
-			w.Header().Set("Content-Type", "application/json")
-			select {
-			case update := <-tgUpdates:
-				w.Write([]byte(update))
-			default:
-				w.Write([]byte(`{"ok": true, "result": []}`))
-			}
-			return
-		}
-
-		if r.URL.Path == "/botTEST_TOKEN/sendMessage" {
-			var req tgSendMessageReq
-			if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-				body, _ := io.ReadAll(r.Body)
-				_ = json.Unmarshal(body, &req)
-			} else {
-				_ = r.ParseForm()
-				req.ChatID, _ = strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
-				req.Text = r.FormValue("text")
-			}
-			tgReplies <- req
-
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok": true}`))
-			return
-		}
-
-		if strings.HasPrefix(r.URL.Path, "/repos/testuser/testrepo/issues") {
-			w.Header().Set("Content-Type", "application/json")
-			if githubUpdatesTriggered.Load() {
-				futureTime := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
-				resp := fmt.Sprintf(`[{"title": "Test Kafka Update", "user": {"login": "testuser"}, "body": "Kafka flow works!", "created_at": "%s", "updated_at": "%s"}]`, futureTime, futureTime)
-				w.Write([]byte(resp))
-			} else {
-				w.Write([]byte(`[]`))
-			}
-			return
-		}
-	}))
-
-	l, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatalf("failed to listen on 0.0.0.0: %v", err)
-	}
-	mockServer.Listener.Close()
-	mockServer.Listener = l
-	mockServer.Start()
+	mockServer, internalMockURL := startMockServer(t, tgUpdates, tgReplies, &githubTriggered)
 	defer mockServer.Close()
-
-	mockServerPort := mockServer.Listener.Addr().(*net.TCPAddr).Port
-	internalMockURL := fmt.Sprintf("http://host.docker.internal:%d", mockServerPort)
 
 	netw, err := network.New(ctx)
 	if err != nil {
 		t.Fatalf("failed to create network: %v", err)
 	}
-	defer netw.Remove(ctx)
+	defer func() { _ = netw.Remove(ctx) }()
 
-	kafkaReq := testcontainers.ContainerRequest{
-		Image:          "bitnamilegacy/kafka:4.0.0",
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"kafka"}},
-		ExposedPorts:   []string{"9092/tcp", "9094/tcp"},
-		Env: map[string]string{
-			"KAFKA_CFG_NODE_ID":                              "0",
-			"KAFKA_CFG_PROCESS_ROLES":                        "broker, controller",
-			"KAFKA_CFG_CONTROLLER_QUORUM_VOTERS":             "0@kafka:9093",
-			"KAFKA_CFG_LISTENERS":                            "BROKER://:9092,CONTROLLER://:9093,INTERNAL://:9094",
-			"KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP":       "BROKER:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT",
-			"KAFKA_CFG_ADVERTISED_LISTENERS":                 "BROKER://kafka:9092,INTERNAL://kafka:9094",
-			"KAFKA_CFG_INTER_BROKER_LISTENER_NAME":           "BROKER",
-			"KAFKA_CFG_CONTROLLER_LISTENER_NAMES":            "CONTROLLER",
-			"KAFKA_CFG_SASL_ENABLED_MECHANISMS":              "PLAIN",
-			"KAFKA_CLIENT_USERS":                             "user1",
-			"KAFKA_CLIENT_PASSWORDS":                         "pass123",
-			"KAFKA_CFG_SASL_MECHANISM_INTER_BROKER_PROTOCOL": "PLAIN",
-			"KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE":            "true",
-		},
-		WaitingFor: wait.ForListeningPort("9092/tcp").WithStartupTimeout(3 * time.Minute),
-	}
-	kafkaContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: kafkaReq,
-		Started:          true,
+	dbScrapCh := asyncStart(func() (testcontainers.Container, error) {
+		return startPostgres(ctx, netw.Name, "postgres", "scrapper_db")
 	})
-	if err != nil {
-		t.Fatalf("failed to start kafka: %v", err)
-	}
-	defer kafkaContainer.Terminate(ctx)
-
-	srReq := testcontainers.ContainerRequest{
-		Image:          "confluentinc/cp-schema-registry:7.5.0",
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"schema-registry"}},
-		ExposedPorts:   []string{"8081/tcp"},
-		Env: map[string]string{
-			"SCHEMA_REGISTRY_HOST_NAME":                    "schema-registry",
-			"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS": "kafka:9094",
-			"SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL": "PLAINTEXT",
-		},
-		WaitingFor: wait.ForHTTP("/subjects").WithPort("8081/tcp").WithStatusCodeMatcher(func(status int) bool {
-			return status == http.StatusOK
-		}).WithStartupTimeout(2 * time.Minute),
-	}
-	srContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: srReq,
-		Started:          true,
+	dbBotCh := asyncStart(func() (testcontainers.Container, error) {
+		return startPostgres(ctx, netw.Name, "postgres-1", "bot_db")
 	})
-	if err != nil {
-		t.Fatalf("failed to start schema registry: %v", err)
-	}
-	defer srContainer.Terminate(ctx)
+	kafkaCh := asyncStart(func() (testcontainers.Container, error) { return startKafka(ctx, netw.Name) })
+	srCh := asyncStart(func() (testcontainers.Container, error) { return startSchemaRegistry(ctx, netw.Name) })
 
-	/*
-		srHost, _ := srContainer.Host(ctx)
-		srPort, _ := srContainer.MappedPort(ctx, "8081")
-		internalSRURL := fmt.Sprintf("http://%s:%s", srHost, srPort.Port())
-	*/
-
-	scrapperDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "user",
-			"POSTGRES_PASSWORD": "password",
-			"POSTGRES_DB":       "scrapper_db",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"postgres"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
+	resScrap := <-dbScrapCh
+	if resScrap.err != nil {
+		t.Fatalf("failed to start scrapper db: %v", resScrap.err)
 	}
-	scrapperDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: scrapperDBReq,
-		Started:          true,
+	defer func() { _ = resScrap.c.Terminate(ctx) }()
+
+	resBot := <-dbBotCh
+	if resBot.err != nil {
+		t.Fatalf("failed to start bot db: %v", resBot.err)
+	}
+	defer func() { _ = resBot.c.Terminate(ctx) }()
+
+	resKafka := <-kafkaCh
+	if resKafka.err != nil {
+		t.Fatalf("failed to start kafka: %v", resKafka.err)
+	}
+	defer func() { _ = resKafka.c.Terminate(ctx) }()
+
+	resSR := <-srCh
+	if resSR.err != nil {
+		t.Fatalf("failed to start schema registry: %v", resSR.err)
+	}
+	defer func() { _ = resSR.c.Terminate(ctx) }()
+
+	scrapperCh := asyncStart(func() (testcontainers.Container, error) {
+		return startScrapper(ctx, netw.Name, "postgres", internalMockURL, "KAFKA", "kafka:9092", "http://schema-registry:8081")
 	})
-	if err != nil {
-		t.Fatalf("failed to start scrapper db: %v", err)
-	}
-	defer scrapperDB.Terminate(ctx)
-
-	botDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "user",
-			"POSTGRES_PASSWORD": "password",
-			"POSTGRES_DB":       "bot_db",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"postgres-1"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
-	}
-	botDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: botDBReq,
-		Started:          true,
+	botCh := asyncStart(func() (testcontainers.Container, error) {
+		return startBot(ctx, netw.Name, "postgres-1", internalMockURL, "KAFKA", "kafka:9092", "http://schema-registry:8081")
 	})
-	if err != nil {
-		t.Fatalf("failed to start bot db: %v", err)
-	}
-	defer botDB.Terminate(ctx)
 
-	scrapperReq := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    ".",
-			Dockerfile: "Dockerfile.scrapper",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"scrapper"}},
-		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
-		Env: map[string]string{
-			"DB_SCRAPPER_HOST":       "postgres",
-			"DB_SCRAPPER_PORT":       "5432",
-			"DB_SCRAPPER_USERNAME":   "user",
-			"DB_SCRAPPER_PASSWORD":   "password",
-			"DB_SCRAPPER_NAME":       "scrapper_db",
-			"BOT_COMMUNICATION_TYPE": "KAFKA",
-			"KAFKA_USER":             "user1",
-			"KAFKA_PASSWORD":         "pass123",
-			"KAFKA_BROKER":           "kafka:9092",
-			"KAFKA_TOPIC":            "updates",
-			"JOB_DURATION":           "2",
-			"CACHE":                  "FALSE",
-			"GITHUB_API_URL":         internalMockURL,
-			"STACKEXCHANGE_API_URL":  internalMockURL,
-			"SCHEMA_REGISTRY_URL":    "http://schema-registry:8081",
-		},
-		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
-			return status == http.StatusBadRequest || status == http.StatusOK
-		}).WithStartupTimeout(2 * time.Minute),
+	resScrapper := <-scrapperCh
+	if resScrapper.err != nil {
+		t.Fatalf("failed to start scrapper: %v", resScrapper.err)
 	}
-	scrapperContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: scrapperReq,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("failed to start scrapper: %v", err)
-	}
-	defer scrapperContainer.Terminate(ctx)
+	defer func() { _ = resScrapper.c.Terminate(ctx) }()
 
-	botReq := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    ".",
-			Dockerfile: "Dockerfile.bot",
-		},
-		Networks:       []string{netw.Name},
-		NetworkAliases: map[string][]string{netw.Name: {"bot"}},
-		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
-		Env: map[string]string{
-			"DB_BOT_HOST":            "postgres-1",
-			"DB_BOT_PORT":            "5432",
-			"DB_BOT_USERNAME":        "user",
-			"DB_BOT_PASSWORD":        "password",
-			"DB_BOT_NAME":            "bot_db",
-			"BOT_COMMUNICATION_TYPE": "KAFKA",
-			"KAFKA_USER":             "user1",
-			"KAFKA_PASSWORD":         "pass123",
-			"KAFKA_BROKER":           "kafka:9092",
-			"KAFKA_TOPIC":            "updates",
-			"KAFKA_CONSUMER_GROUP":   "e2e-test-group",
-			"APP_TELEGRAM_TOKEN":     "TEST_TOKEN",
-			"SKIP_COMMANDS":          "TRUE",
-			"TG_API_BASE_URL":        internalMockURL,
-			"SCHEMA_REGISTRY_URL":    "http://schema-registry:8081",
-		},
-		WaitingFor: wait.ForLog("start polling").WithStartupTimeout(2 * time.Minute),
+	resBotApp := <-botCh
+	if resBotApp.err != nil {
+		t.Fatalf("failed to start bot: %v", resBotApp.err)
 	}
-	botContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: botReq,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("failed to start bot: %v", err)
-	}
-	defer botContainer.Terminate(ctx)
+	defer func() { _ = resBotApp.c.Terminate(ctx) }()
 
 	chatID := int64(3003)
 
@@ -541,7 +244,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 			t.Fatalf("expected 'ok, saved', got '%s'", reply.Text)
 		}
 
-		githubUpdatesTriggered.Store(true)
+		githubTriggered.Store(true)
 
 		select {
 		case reply := <-tgReplies:
@@ -557,8 +260,9 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	})
 }
 
-//nolint:gocognit
+//nolint:gocognit,tparallel // avoid data race
 func TestAgentKafkaIntegration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	kafkaContainer, err := kafka.Run(ctx,
@@ -568,7 +272,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to start kafka: %v", err)
 	}
-	defer kafkaContainer.Terminate(ctx)
+	defer func() { _ = kafkaContainer.Terminate(ctx) }()
 
 	brokers, err := kafkaContainer.Brokers(ctx)
 	if err != nil || len(brokers) == 0 {
@@ -586,7 +290,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sync producer: %v", err)
 	}
-	defer producer.Close()
+	defer func() { _ = producer.Close() }()
 
 	agentCtx, cancelAgent := context.WithCancel(ctx)
 	defer cancelAgent()
@@ -606,7 +310,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new consumer group: %v", err)
 	}
-	defer consumerGroup.Close()
+	defer func() { _ = consumerGroup.Close() }()
 
 	go func() {
 		for {
@@ -623,7 +327,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new test consumer: %v", err)
 	}
-	defer testConsumer.Close()
+	defer func() { _ = testConsumer.Close() }()
 
 	time.Sleep(3 * time.Second)
 
@@ -631,7 +335,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consume partition: %v", err)
 	}
-	defer partConsumer.Close()
+	defer func() { _ = partConsumer.Close() }()
 
 	t.Run("receive valid message", func(t *testing.T) {
 		validMsg := `{"id": 12345, "description": "This is a perfectly valid long update.", "author": "good_author", "tgChatIds": [111, 222]}`
@@ -690,5 +394,228 @@ func TestAgentKafkaIntegration(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("timeout waiting for recovery message")
 		}
+	})
+}
+
+func asyncStart(startFn func() (testcontainers.Container, error)) <-chan containerResult {
+	ch := make(chan containerResult, 1)
+	go func() {
+		c, err := startFn()
+		ch <- containerResult{c: c, err: err}
+		close(ch)
+	}()
+	return ch
+}
+
+func startMockServer(t *testing.T, tgUpdates <-chan string, tgReplies chan<- tgSendMessageReq, githubTriggered *atomic.Bool) (*httptest.Server, string) {
+	t.Helper()
+	mockServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/botTEST_TOKEN/getMe" {
+			_, _ = w.Write([]byte(`{"ok": true, "result": {"id": 123456789, "is_bot": true, "first_name": "TestBot", "username": "TestBot"}}`))
+			return
+		}
+
+		if r.URL.Path == "/botTEST_TOKEN/getUpdates" {
+			select {
+			case update := <-tgUpdates:
+				_, _ = w.Write([]byte(update))
+			default:
+				_, _ = w.Write([]byte(`{"ok": true, "result": []}`))
+			}
+			return
+		}
+
+		if r.URL.Path == "/botTEST_TOKEN/sendMessage" {
+			var req tgSendMessageReq
+			if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+				body, err := io.ReadAll(r.Body)
+				if err == nil {
+					_ = json.Unmarshal(body, &req)
+				}
+				_ = r.Body.Close()
+			} else {
+				_ = r.ParseForm()
+				req.ChatID, _ = strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+				req.Text = r.FormValue("text")
+			}
+			tgReplies <- req
+			_, _ = w.Write([]byte(`{"ok": true}`))
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/repos/testuser/testrepo/issues") {
+			if githubTriggered != nil && githubTriggered.Load() {
+				futureTime := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+				resp := fmt.Sprintf(`[{"title": "Test Kafka Update", "user": {"login": "testuser"}, "body": "Kafka flow works!", "created_at": "%s", "updated_at": "%s"}]`, futureTime, futureTime)
+				_, _ = w.Write([]byte(resp))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
+			return
+		}
+
+		t.Logf("Mock server received unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	l, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("failed to listen on 0.0.0.0: %v", err)
+	}
+	_ = mockServer.Listener.Close()
+	mockServer.Listener = l
+	mockServer.Start()
+
+	port := mockServer.Listener.Addr().(*net.TCPAddr).Port
+	return mockServer, fmt.Sprintf("http://host.docker.internal:%d", port)
+}
+
+func startPostgres(ctx context.Context, netName, alias, dbName string) (testcontainers.Container, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        "postgres:17",
+		ExposedPorts: []string{"5432/tcp"},
+		Env: map[string]string{
+			"POSTGRES_USER":     "user",
+			"POSTGRES_PASSWORD": "password",
+			"POSTGRES_DB":       dbName,
+		},
+		Networks:       []string{netName},
+		NetworkAliases: map[string][]string{netName: {alias}},
+		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
+	}
+	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+}
+
+func startKafka(ctx context.Context, netName string) (testcontainers.Container, error) {
+	req := testcontainers.ContainerRequest{
+		Image:          "bitnamilegacy/kafka:4.0.0",
+		Networks:       []string{netName},
+		NetworkAliases: map[string][]string{netName: {"kafka"}},
+		ExposedPorts:   []string{"9092/tcp", "9094/tcp"},
+		Env: map[string]string{
+			"KAFKA_CFG_NODE_ID":                              "0",
+			"KAFKA_CFG_PROCESS_ROLES":                        "broker, controller",
+			"KAFKA_CFG_CONTROLLER_QUORUM_VOTERS":             "0@kafka:9093",
+			"KAFKA_CFG_LISTENERS":                            "BROKER://:9092,CONTROLLER://:9093,INTERNAL://:9094",
+			"KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP":       "BROKER:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT",
+			"KAFKA_CFG_ADVERTISED_LISTENERS":                 "BROKER://kafka:9092,INTERNAL://kafka:9094",
+			"KAFKA_CFG_INTER_BROKER_LISTENER_NAME":           "BROKER",
+			"KAFKA_CFG_CONTROLLER_LISTENER_NAMES":            "CONTROLLER",
+			"KAFKA_CFG_SASL_ENABLED_MECHANISMS":              "PLAIN",
+			"KAFKA_CLIENT_USERS":                             "user1",
+			"KAFKA_CLIENT_PASSWORDS":                         "pass123",
+			"KAFKA_CFG_SASL_MECHANISM_INTER_BROKER_PROTOCOL": "PLAIN",
+			"KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE":            "true",
+		},
+		WaitingFor: wait.ForListeningPort("9092/tcp").WithStartupTimeout(3 * time.Minute),
+	}
+	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+}
+
+func startSchemaRegistry(ctx context.Context, netName string) (testcontainers.Container, error) {
+	req := testcontainers.ContainerRequest{
+		Image:          "confluentinc/cp-schema-registry:7.5.0",
+		Networks:       []string{netName},
+		NetworkAliases: map[string][]string{netName: {"schema-registry"}},
+		ExposedPorts:   []string{"8081/tcp"},
+		Env: map[string]string{
+			"SCHEMA_REGISTRY_HOST_NAME":                    "schema-registry",
+			"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS": "kafka:9094",
+			"SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL": "PLAINTEXT",
+		},
+		WaitingFor: wait.ForHTTP("/subjects").WithPort("8081/tcp").WithStatusCodeMatcher(func(status int) bool {
+			return status == http.StatusOK
+		}).WithStartupTimeout(2 * time.Minute),
+	}
+	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+}
+
+func startScrapper(ctx context.Context, netName, dbHost, internalMockURL, botCommType, kafkaBroker, srURL string) (testcontainers.Container, error) {
+	env := map[string]string{
+		"DB_SCRAPPER_HOST":       dbHost,
+		"DB_SCRAPPER_PORT":       "5432",
+		"DB_SCRAPPER_USERNAME":   "user",
+		"DB_SCRAPPER_PASSWORD":   "password",
+		"DB_SCRAPPER_NAME":       "scrapper_db",
+		"BOT_COMMUNICATION_TYPE": botCommType,
+		"CACHE":                  "FALSE",
+		"GITHUB_API_URL":         internalMockURL,
+		"STACKEXCHANGE_API_URL":  internalMockURL,
+	}
+
+	if botCommType == "KAFKA" {
+		env["KAFKA_USER"] = "user1"
+		env["KAFKA_PASSWORD"] = "pass123"
+		env["KAFKA_BROKER"] = kafkaBroker
+		env["KAFKA_TOPIC"] = "updates"
+		env["JOB_DURATION"] = "2"
+		env["SCHEMA_REGISTRY_URL"] = srURL
+	}
+
+	req := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    ".",
+			Dockerfile: "Dockerfile.scrapper",
+		},
+		Networks:       []string{netName},
+		NetworkAliases: map[string][]string{netName: {"scrapper"}},
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
+		Env:            env,
+		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
+			return status == http.StatusBadRequest || status == http.StatusOK
+		}).WithStartupTimeout(2 * time.Minute),
+	}
+	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+}
+
+func startBot(ctx context.Context, netName, dbHost, internalMockURL, botCommType, kafkaBroker, srURL string) (testcontainers.Container, error) {
+	env := map[string]string{
+		"DB_BOT_HOST":            dbHost,
+		"DB_BOT_PORT":            "5432",
+		"DB_BOT_USERNAME":        "user",
+		"DB_BOT_PASSWORD":        "password",
+		"DB_BOT_NAME":            "bot_db",
+		"BOT_COMMUNICATION_TYPE": botCommType,
+		"APP_TELEGRAM_TOKEN":     "TEST_TOKEN",
+		"SKIP_COMMANDS":          "TRUE",
+		"TG_API_BASE_URL":        internalMockURL,
+	}
+
+	if botCommType == "KAFKA" {
+		env["KAFKA_USER"] = "user1"
+		env["KAFKA_PASSWORD"] = "pass123"
+		env["KAFKA_BROKER"] = kafkaBroker
+		env["KAFKA_TOPIC"] = "updates"
+		env["KAFKA_CONSUMER_GROUP"] = "e2e-test-group"
+		env["SCHEMA_REGISTRY_URL"] = srURL
+	}
+
+	req := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    ".",
+			Dockerfile: "Dockerfile.bot",
+		},
+		Networks:       []string{netName},
+		NetworkAliases: map[string][]string{netName: {"bot"}},
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
+		Env:            env,
+		WaitingFor:     wait.ForLog("start polling").WithStartupTimeout(2 * time.Minute),
+	}
+	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
 	})
 }
