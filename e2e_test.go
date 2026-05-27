@@ -333,7 +333,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	var partConsumer sarama.PartitionConsumer
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		partConsumer, err = testConsumer.ConsumePartition("link.processed-updates", 0, sarama.OffsetOldest)
 		if err == nil {
 			break
