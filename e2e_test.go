@@ -176,7 +176,6 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		return startPostgres(ctx, netw.Name, "postgres-1", "bot_db")
 	})
 	kafkaCh := asyncStart(func() (testcontainers.Container, error) { return startKafka(ctx, netw.Name) })
-	srCh := asyncStart(func() (testcontainers.Container, error) { return startSchemaRegistry(ctx, netw.Name) })
 
 	resScrap := <-dbScrapCh
 	if resScrap.err != nil {
@@ -195,6 +194,8 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		t.Fatalf("failed to start kafka: %v", resKafka.err)
 	}
 	defer func() { _ = resKafka.c.Terminate(ctx) }()
+
+	srCh := asyncStart(func() (testcontainers.Container, error) { return startSchemaRegistry(ctx, netw.Name) })
 
 	resSR := <-srCh
 	if resSR.err != nil {
@@ -482,7 +483,10 @@ func startPostgres(ctx context.Context, netName, alias, dbName string) (testcont
 		},
 		Networks:       []string{netName},
 		NetworkAliases: map[string][]string{netName: {alias}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
+		Tmpfs: map[string]string{
+			"/var/lib/postgresql/data": "rw,noexec,nosuid,size=256m",
+		},
+		WaitingFor: wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
 	}
 	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -530,7 +534,7 @@ func startSchemaRegistry(ctx context.Context, netName string) (testcontainers.Co
 		ExposedPorts:   []string{"8081/tcp"},
 		Env: map[string]string{
 			"SCHEMA_REGISTRY_HOST_NAME":                    "schema-registry",
-			"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS": "kafka:9094",
+			"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS": "PLAINTEXT://kafka:9094",
 			"SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL": "PLAINTEXT",
 		},
 		WaitingFor: wait.ForHTTP("/subjects").WithPort("8081/tcp").WithStatusCodeMatcher(func(status int) bool {
@@ -574,9 +578,6 @@ func startScrapper(ctx context.Context, netName, dbHost, internalMockURL, botCom
 		NetworkAliases: map[string][]string{netName: {"scrapper"}},
 		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
 		Env:            env,
-		Tmpfs: map[string]string{
-			"/var/lib/postgresql/data": "rw,noexec,nosuid,size=256m",
-		},
 		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
 			return status == http.StatusBadRequest || status == http.StatusOK
 		}).WithStartupTimeout(2 * time.Minute),
