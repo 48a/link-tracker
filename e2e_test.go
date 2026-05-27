@@ -511,6 +511,9 @@ func startKafka(ctx context.Context, netName string) (testcontainers.Container, 
 			"KAFKA_CFG_SASL_MECHANISM_INTER_BROKER_PROTOCOL": "PLAIN",
 			"KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE":            "true",
 		},
+		Tmpfs: map[string]string{
+			"/bitnami/kafka": "rw,noexec,nosuid,size=512m",
+		},
 		WaitingFor: wait.ForListeningPort("9092/tcp").WithStartupTimeout(3 * time.Minute),
 	}
 	return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -571,6 +574,9 @@ func startScrapper(ctx context.Context, netName, dbHost, internalMockURL, botCom
 		NetworkAliases: map[string][]string{netName: {"scrapper"}},
 		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
 		Env:            env,
+		Tmpfs: map[string]string{
+			"/var/lib/postgresql/data": "rw,noexec,nosuid,size=256m",
+		},
 		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
 			return status == http.StatusBadRequest || status == http.StatusOK
 		}).WithStartupTimeout(2 * time.Minute),
