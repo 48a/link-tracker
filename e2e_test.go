@@ -97,8 +97,7 @@ func TestE2EFlow(t *testing.T) {
 	defer mockServer.Close()
 
 	mockServerPort := mockServer.Listener.Addr().(*net.TCPAddr).Port
-	hostIP := getTestHostIP()
-	internalMockURL := fmt.Sprintf("http://%s:%d", hostIP, mockServerPort)
+	internalMockURL := fmt.Sprintf("http://host.docker.internal:%d", mockServerPort)
 
 	netw, err := network.New(ctx)
 	if err != nil {
@@ -335,8 +334,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	defer mockServer.Close()
 
 	mockServerPort := mockServer.Listener.Addr().(*net.TCPAddr).Port
-	hostIP := getTestHostIP()
-	internalMockURL := fmt.Sprintf("http://%s:%d", hostIP, mockServerPort)
+	internalMockURL := fmt.Sprintf("http://host.docker.internal:%d", mockServerPort)
 
 	netw, err := network.New(ctx)
 	if err != nil {
@@ -693,23 +691,4 @@ func TestAgentKafkaIntegration(t *testing.T) {
 			t.Fatal("timeout waiting for recovery message")
 		}
 	})
-}
-
-func getTestHostIP() string {
-	dockerHost := os.Getenv("DOCKER_HOST")
-	if strings.HasPrefix(dockerHost, "tcp://") {
-		host := strings.TrimPrefix(dockerHost, "tcp://")
-		conn, err := net.DialTimeout("tcp", host, 2*time.Second)
-		if err == nil {
-			defer conn.Close()
-			return conn.LocalAddr().(*net.TCPAddr).IP.String()
-		}
-	}
-	addrs, _ := net.InterfaceAddrs()
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
-			return ipnet.IP.String()
-		}
-	}
-	return "host.docker.internal"
 }
