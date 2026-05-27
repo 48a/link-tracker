@@ -3,11 +3,17 @@ package githubfetcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+)
+
+const (
+	maxLen      = 200
+	httpTimeout = time.Duration(10) * time.Second
 )
 
 type UpdateInfo struct {
@@ -46,7 +52,7 @@ func NewFetcher(token string, timeout int) *Fetcher {
 	}
 
 	return &Fetcher{
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: httpTimeout},
 		token:      token,
 		timeout:    time.Duration(timeout) * time.Second,
 		baseURL:    baseURL,
@@ -83,14 +89,14 @@ func (f *Fetcher) FetchUpdates(repoURL string, since time.Time) ([]UpdateInfo, e
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github api returned status: %s", resp.Status)
 	}
 
 	var rawIssues []githubIssue
-	if err := json.NewDecoder(resp.Body).Decode(&rawIssues); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&rawIssues); err != nil {
 		return nil, fmt.Errorf("failed to decode json: %w", err)
 	}
 
@@ -108,8 +114,8 @@ func (f *Fetcher) FetchUpdates(repoURL string, since time.Time) ([]UpdateInfo, e
 
 		description := issue.Body
 		runes := []rune(description)
-		if len(runes) > 200 {
-			description = string(runes[:200]) + "..."
+		if len(runes) > maxLen {
+			description = string(runes[:maxLen]) + "..."
 		}
 
 		updates = append(updates, UpdateInfo{
@@ -125,16 +131,17 @@ func (f *Fetcher) FetchUpdates(repoURL string, since time.Time) ([]UpdateInfo, e
 	return updates, nil
 }
 
+//nolint:mnd // not a magic number
 func parseURL(repoURL string) (string, string, error) {
 	repoURL = strings.TrimSuffix(repoURL, "/")
 	parts := strings.Split(repoURL, "github.com/")
 	if len(parts) < 2 {
-		return "", "", fmt.Errorf("invalid github host")
+		return "", "", errors.New("invalid github host")
 	}
 
 	pathParts := strings.Split(parts[1], "/")
 	if len(pathParts) < 2 {
-		return "", "", fmt.Errorf("missing owner or repository name")
+		return "", "", errors.New("missing owner or repository name")
 	}
 
 	return pathParts[0], pathParts[1], nil

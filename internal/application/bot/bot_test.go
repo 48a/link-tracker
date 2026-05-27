@@ -15,6 +15,7 @@ import (
 
 var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+//nolint:tparallel // subtests have a common controller which will cause data races
 func TestBot_HandleMessage(t *testing.T) {
 	t.Parallel()
 

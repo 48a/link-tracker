@@ -2,6 +2,7 @@ package producer
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -26,14 +27,16 @@ const avroSchema = `{
   ]
 }`
 
-type producer struct {
+const confluentHeaderLen = 5
+
+type Producer struct {
 	prod     sarama.SyncProducer
 	topic    string
 	schemaID uint32
 	codec    *goavro.Codec
 }
 
-func NewProducer(brokerAddrs []string, kafkaUser, kafkaPassword, kafkaTopic, schemaRegistryURL string) (*producer, error) {
+func NewProducer(brokerAddrs []string, kafkaUser, kafkaPassword, kafkaTopic, schemaRegistryURL string) (*Producer, error) {
 	cfg := kafkaconfig.NewConfig(kafkaUser, kafkaPassword)
 
 	p, err := sarama.NewSyncProducer(brokerAddrs, cfg)
@@ -51,7 +54,7 @@ func NewProducer(brokerAddrs []string, kafkaUser, kafkaPassword, kafkaTopic, sch
 		return nil, fmt.Errorf("register schema: %w", err)
 	}
 
-	return &producer{
+	return &Producer{
 		prod:     p,
 		topic:    kafkaTopic,
 		schemaID: schemaID,
@@ -59,7 +62,7 @@ func NewProducer(brokerAddrs []string, kafkaUser, kafkaPassword, kafkaTopic, sch
 	}, nil
 }
 
-func (p *producer) SendUpdate(linkUpdate botapi.LinkUpdate) error {
+func (p *Producer) SendUpdate(linkUpdate botapi.LinkUpdate) error {
 	tgChatIDs := make([]interface{}, len(linkUpdate.TgChatIDs))
 	for i, id := range linkUpdate.TgChatIDs {
 		tgChatIDs[i] = id
@@ -77,7 +80,7 @@ func (p *producer) SendUpdate(linkUpdate botapi.LinkUpdate) error {
 		return fmt.Errorf("encode avro data: %w", err)
 	}
 
-	wireMsg := make([]byte, 5+len(avroData))
+	wireMsg := make([]byte, confluentHeaderLen+len(avroData))
 	wireMsg[0] = 0
 	binary.BigEndian.PutUint32(wireMsg[1:5], p.schemaID)
 	copy(wireMsg[5:], avroData)
@@ -96,8 +99,8 @@ func (p *producer) SendUpdate(linkUpdate botapi.LinkUpdate) error {
 	return nil
 }
 
-func (p *producer) Close() error {
-	return p.prod.Close()
+func (p *Producer) Close() error {
+	return fmt.Errorf("close producer: %w", p.prod.Close())
 }
 
 type srRegisterRequest struct {
@@ -110,11 +113,19 @@ type srRegisterResponse struct {
 
 func registerSchema(srURL, topic, schemaStr string) (uint32, error) {
 	reqBody, _ := json.Marshal(srRegisterRequest{Schema: schemaStr})
-	resp, err := http.Post(fmt.Sprintf("%s/subjects/%s-value/versions", srURL, topic), "application/vnd.schemaregistry.v1+json", bytes.NewBuffer(reqBody))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, fmt.Sprintf("%s/subjects/%s-value/versions", srURL, topic), bytes.NewBuffer(reqBody))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("create request: %w", err)
 	}
-	defer resp.Body.Close()
+	req.Header.Set("Content-Type", "application/vnd.schemaregistry.v1+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("do request: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -122,8 +133,8 @@ func registerSchema(srURL, topic, schemaStr string) (uint32, error) {
 	}
 
 	var srResp srRegisterResponse
-	if err := json.NewDecoder(resp.Body).Decode(&srResp); err != nil {
-		return 0, err
+	if err = json.NewDecoder(resp.Body).Decode(&srResp); err != nil {
+		return 0, fmt.Errorf("decode response body: %w", err)
 	}
 	return srResp.ID, nil
 }

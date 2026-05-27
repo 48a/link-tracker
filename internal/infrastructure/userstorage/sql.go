@@ -3,12 +3,12 @@ package userstorage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -28,7 +28,7 @@ func NewPgStorage(dsn string, timeout int) (*PgStorage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sql open: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	driver, err := postgres.WithInstance(db, &postgres.Config{})
 	if err != nil {
@@ -41,7 +41,7 @@ func NewPgStorage(dsn string, timeout int) (*PgStorage, error) {
 	}
 
 	if err = m.Up(); err != nil {
-		if err == migrate.ErrNoChange {
+		if errors.Is(err, migrate.ErrNoChange) {
 			fmt.Println("No new migrations to apply or migrations folder is empty")
 		} else {
 			return nil, fmt.Errorf("migrate up: %w", err)
@@ -69,7 +69,7 @@ func (p *PgStorage) GetUserState(ctx context.Context, chatID int64) (int, bool, 
 	).Scan(&state)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, false, nil
 		}
 		return 0, false, fmt.Errorf("get user state: %w", err)
@@ -139,7 +139,7 @@ func (p *PgStorage) GetRequest(ctx context.Context, chatID int64) (Request, erro
 	err := p.pool.QueryRow(ctx, query, chatID).Scan(&req.URL, &req.Tags)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return Request{Tags: []string{}}, nil
 		}
 		return Request{}, fmt.Errorf("get request: %w", err)

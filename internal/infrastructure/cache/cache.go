@@ -10,6 +10,12 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 )
 
+type cacheLink struct {
+	ID   int64    `json:"id"`
+	URL  string   `json:"url"`
+	Tags []string `json:"tags"`
+}
+
 type Cache struct {
 	client  valkey.Client
 	ttl     time.Duration
@@ -35,10 +41,6 @@ func NewCache(host, port, username, password string, ttl, timeout int) (*Cache, 
 	}, nil
 }
 
-func (c *Cache) key(chatID int64) string {
-	return fmt.Sprintf("chat:%d:links", chatID)
-}
-
 func (c *Cache) GetLinks(ctx context.Context, chatID int64) ([]domain.Link, error) {
 	opCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -53,9 +55,14 @@ func (c *Cache) GetLinks(ctx context.Context, chatID int64) ([]domain.Link, erro
 		return nil, fmt.Errorf("valkey get: %w", err)
 	}
 
-	var links []domain.Link
-	if err := json.Unmarshal([]byte(val), &links); err != nil {
+	var cachedLinks []cacheLink
+	if err = json.Unmarshal([]byte(val), &cachedLinks); err != nil {
 		return nil, fmt.Errorf("unmarshal cached links: %w", err)
+	}
+
+	links := make([]domain.Link, len(cachedLinks))
+	for i, cl := range cachedLinks {
+		links[i] = domain.Link{ID: cl.ID, URL: cl.URL, Tags: cl.Tags}
 	}
 
 	return links, nil
@@ -65,13 +72,21 @@ func (c *Cache) SetLinks(ctx context.Context, chatID int64, links []domain.Link)
 	opCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	data, err := json.Marshal(links)
+	cachedLinks := make([]cacheLink, len(links))
+	for i, l := range links {
+		cachedLinks[i] = cacheLink{ID: l.ID, URL: l.URL, Tags: l.Tags}
+	}
+
+	data, err := json.Marshal(cachedLinks)
 	if err != nil {
 		return fmt.Errorf("marshal links for cache: %w", err)
 	}
 
 	cmd := c.client.B().Set().Key(c.key(chatID)).Value(string(data)).Ex(c.ttl).Build()
-	return c.client.Do(opCtx, cmd).Error()
+	if err = c.client.Do(opCtx, cmd).Error(); err != nil {
+		return fmt.Errorf("valkey client do: %w", err)
+	}
+	return nil
 }
 
 func (c *Cache) Invalidate(ctx context.Context, chatID int64) error {
@@ -79,5 +94,12 @@ func (c *Cache) Invalidate(ctx context.Context, chatID int64) error {
 	defer cancel()
 
 	cmd := c.client.B().Del().Key(c.key(chatID)).Build()
-	return c.client.Do(opCtx, cmd).Error()
+	if err := c.client.Do(opCtx, cmd).Error(); err != nil {
+		return fmt.Errorf("valkey client do: %w", err)
+	}
+	return nil
+}
+
+func (c *Cache) key(chatID int64) string {
+	return fmt.Sprintf("chat:%d:links", chatID)
 }

@@ -53,7 +53,7 @@ func (h *Handler) response(w http.ResponseWriter, httpStatus int, data any) {
 func (h *Handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) bool {
 	requestBody, err := io.ReadAll(body)
 	if err != nil {
-		h.response(w, http.StatusInternalServerError, setApiErrorCode(botapi.ApiErrorResponse{
+		h.response(w, http.StatusInternalServerError, setAPIErrorCode(botapi.APIErrorResponse{
 			Description: "can't read request body",
 		}, http.StatusInternalServerError))
 		return false
@@ -61,7 +61,7 @@ func (h *Handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) b
 
 	err = json.Unmarshal(requestBody, dst)
 	if err != nil {
-		h.response(w, http.StatusBadRequest, setApiErrorCode(botapi.ApiErrorResponse{
+		h.response(w, http.StatusBadRequest, setAPIErrorCode(botapi.APIErrorResponse{
 			Description: "invalid request in body",
 		}, http.StatusBadRequest))
 		return false
@@ -69,7 +69,7 @@ func (h *Handler) readBody(w http.ResponseWriter, body io.ReadCloser, dst any) b
 	return true
 }
 
-func setApiErrorCode(apiError botapi.ApiErrorResponse, httpStatus int) botapi.ApiErrorResponse {
+func setAPIErrorCode(apiError botapi.APIErrorResponse, httpStatus int) botapi.APIErrorResponse {
 	apiError.Code = strconv.Itoa(httpStatus)
 	return apiError
 }

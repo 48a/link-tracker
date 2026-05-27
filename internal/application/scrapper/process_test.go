@@ -27,7 +27,7 @@ func TestProcess_GithubIssue(t *testing.T) {
 	mockGHFetcher := NewMockgithubFetcher(ctrl)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := &service{
+	svc := &Service{
 		logger:        logger,
 		storage:       mockStorage,
 		client:        mockClient,
@@ -85,7 +85,7 @@ func TestProcess_StackOverflowAnswer(t *testing.T) {
 	mockSOFetcher := NewMockstackoverflowFetcher(ctrl)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := &service{
+	svc := &Service{
 		logger:    logger,
 		storage:   mockStorage,
 		client:    mockClient,
@@ -144,7 +144,7 @@ func TestProcess_APIUnavailable(t *testing.T) {
 	mockGHFetcher := NewMockgithubFetcher(ctrl)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := &service{
+	svc := &Service{
 		logger:        logger,
 		storage:       mockStorage,
 		client:        mockClient,
@@ -174,7 +174,7 @@ func TestProcess_PreviewTruncation(t *testing.T) {
 	mockGHFetcher := NewMockgithubFetcher(ctrl)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := &service{
+	svc := &Service{
 		logger:        logger,
 		storage:       mockStorage,
 		client:        mockClient,

@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/scrapper"
 	botclient "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/client"
 	botproducer "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/producer"
@@ -37,84 +37,98 @@ func main() {
 
 	logger.Info("started scrapper", slog.String("config", fmt.Sprintf("%#v", cfg)))
 
-	var linkStorage scrapper.LinkStorage
-	switch cfg.AccessType {
-	case "QUERY_BUILDER":
-		linkStorage, err = linkstorage.NewSquirrelStorage(cfg.toDSN(), 5*time.Second, "file:///app/migrations")
-		logger.Info("", slog.String("dsn", cfg.toDSN()))
-		if err != nil {
-			logger.Error("create squirrel linkstorage", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-
-	case "SQL":
-		linkStorage, err = linkstorage.NewLinkStorage(cfg.toDSN(), 5*time.Second, "file:///app/migrations")
-		logger.Info("", slog.String("dsn", cfg.toDSN()))
-		if err != nil {
-			logger.Error("create sql linkstorage", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-
-	case "IN_MEMORY":
-		linkStorage = linkstorage.NewLinkStorageInMemory()
-		logger.Info("use in-memory link storage")
-
-	default:
-		logger.Error("incorrect access type", slog.String("accessType", cfg.AccessType))
+	linkStorage, err := setupStorage(cfg, logger)
+	if err != nil {
+		logger.Error("setup storage", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	var client scrapper.BotClient
-	switch cfg.CommunicationType {
-	case "KAFKA":
-		client1, err := botproducer.NewProducer(cfg.KafkaBroker, cfg.KafkaUser, cfg.KafkaPassword, cfg.KafkaTopic, cfg.SchemaRegistryURL)
-		if err != nil {
-			logger.Error("new producer", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-		defer func() {
-			if err := client1.Close(); err != nil {
-				logger.Error("close client", slog.String("error", err.Error()))
-				os.Exit(1)
-			}
-		}()
-		client = client1
-
-	case "HTTP":
-		client = botclient.NewRestClient("http://bot:8002", 5*time.Second)
-
-	default:
-		logger.Error("incorrect communication type", slog.String("communicationType", cfg.CommunicationType))
+	client, cleanupClient, err := setupClient(cfg, logger)
+	if err != nil {
+		logger.Error("setup client", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-
-	githubfetcher := githubfetcher.NewFetcher(cfg.GithubToken, cfg.GithubTimeout)
-	sofetcher := stackoverflowfetcher.NewFetcher(cfg.StackoverflowToken, cfg.SoTimeout)
+	defer cleanupClient()
 
 	var linkCache scrapper.LinksCache
 	if cfg.Cache {
-		linkCache, err = cache.NewCache(cfg.ValkeyHost, cfg.ValkeyPort, cfg.ValkeyUsername, cfg.ValkeyPassword, cfg.ValkeyCacheTTL, cfg.ValkeyTimeout)
+		var c *cache.Cache
+		c, err = cache.NewCache(cfg.ValkeyHost, cfg.ValkeyPort, cfg.ValkeyUsername, cfg.ValkeyPassword, cfg.ValkeyCacheTTL, cfg.ValkeyTimeout)
 		if err != nil {
 			logger.Error("create link cache", slog.String("error", err.Error()))
-			os.Exit(1)
+			return
 		}
+		linkCache = c
 	}
 
-	svc, err := scrapper.NewService(logger, client, linkStorage, githubfetcher, sofetcher, linkCache, cfg.JobDuration)
+	ghFetcher := githubfetcher.NewFetcher(cfg.GithubToken, cfg.GithubTimeout)
+	soFetcher := stackoverflowfetcher.NewFetcher(cfg.StackoverflowToken, cfg.SoTimeout)
+
+	svc, err := scrapper.NewService(logger, client, linkStorage, ghFetcher, soFetcher, linkCache, cfg.JobDuration)
 	if err != nil {
 		logger.Error("create scrapper", slog.String("error", err.Error()))
-		os.Exit(1)
+		return
 	}
 
 	if err = svc.LoadAllLinks(); err != nil {
 		logger.Error("scrapper load all links", slog.String("error", err.Error()))
-		os.Exit(1)
+		return
 	}
 
 	handler := scrapperserver.NewHandler(svc, logger)
-
 	srv := scrapperserver.NewServer(":8001", handler)
 
+	startServer(srv, svc, logger)
+
+}
+
+func setupStorage(cfg *config, logger *slog.Logger) (scrapper.LinkStorage, error) {
+	switch cfg.AccessType {
+	case "QUERY_BUILDER":
+		logger.Info("", slog.String("dsn", cfg.toDSN()))
+		store, err := linkstorage.NewSquirrelStorage(cfg.toDSN(), linkstorageTimeout, "file:///app/migrations")
+		if err != nil {
+			return nil, fmt.Errorf("create squirrel storage: %w", err)
+		}
+		return store, nil
+	case "SQL":
+		logger.Info("", slog.String("dsn", cfg.toDSN()))
+		store, err := linkstorage.NewLinkStorage(cfg.toDSN(), linkstorageTimeout, "file:///app/migrations")
+		if err != nil {
+			return nil, fmt.Errorf("create sql storage: %w", err)
+		}
+		return store, nil
+	case "IN_MEMORY":
+		logger.Info("use in-memory link storage")
+		return linkstorage.NewInMemory(), nil
+	default:
+		return nil, fmt.Errorf("incorrect access type: %s", cfg.AccessType)
+	}
+}
+
+func setupClient(cfg *config, logger *slog.Logger) (scrapper.BotClient, func(), error) {
+	cleanup := func() {}
+
+	switch cfg.CommunicationType {
+	case "KAFKA":
+		prod, err := botproducer.NewProducer(cfg.KafkaBroker, cfg.KafkaUser, cfg.KafkaPassword, cfg.KafkaTopic, cfg.SchemaRegistryURL)
+		if err != nil {
+			return nil, cleanup, fmt.Errorf("new producer: %w", err)
+		}
+		cleanup = func() {
+			if err = prod.Close(); err != nil {
+				logger.Error("close client", slog.String("error", err.Error()))
+			}
+		}
+		return prod, cleanup, nil
+	case "HTTP":
+		return botclient.NewRestClient("http://bot:8002", restTimeout), cleanup, nil
+	default:
+		return nil, cleanup, fmt.Errorf("incorrect communication type: %s", cfg.CommunicationType)
+	}
+}
+
+func startServer(srv scrapperserver.Server, svc *scrapper.Service, logger *slog.Logger) {
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 
@@ -126,10 +140,9 @@ func main() {
 	}()
 
 	<-sigterm
-
 	logger.Info("scrapper gracefully shutting down")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 	defer cancel()
 
 	if err := srv.Stop(ctx); err != nil {

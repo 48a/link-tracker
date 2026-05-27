@@ -28,7 +28,7 @@ func NewConsumer(h *Handler, kafkaBroker []string, kafkaUser, kafkaPassword, kaf
 		return Consumer{}, fmt.Errorf("create consumer: %w", err)
 	}
 
-	return Consumer{cg: consumerGroup, h: h, topic: topic}, nil
+	return Consumer{cg: consumerGroup, h: h, topic: topic, logger: logger}, nil
 }
 
 func (c Consumer) Serve(ctx context.Context) {
@@ -51,5 +51,5 @@ func (c Consumer) Serve(ctx context.Context) {
 }
 
 func (c Consumer) Close() error {
-	return c.cg.Close()
+	return fmt.Errorf("close consumer group: %w", c.cg.Close())
 }

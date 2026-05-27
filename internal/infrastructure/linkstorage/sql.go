@@ -9,62 +9,37 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
 )
 
-type linkStorage struct {
+type SQLStorage struct {
 	pool    *pgxpool.Pool
 	timeout time.Duration
 }
 
-func NewLinkStorage(dsn string, timeout time.Duration, migrations string) (*linkStorage, error) {
-	cfg, err := pgxpool.ParseConfig(dsn)
+func NewLinkStorage(dsn string, timeout time.Duration, migrations string) (*SQLStorage, error) {
+	pool, err := initDBPool(dsn, migrations)
 	if err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return nil, err
 	}
 
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("sql open: %w", err)
-	}
-
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
-	if err != nil {
-		return nil, fmt.Errorf("driver: %w", err)
-	}
-
-	m, err := migrate.NewWithDatabaseInstance(migrations, "postgres", driver)
-	if err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	if err = m.Up(); err != migrate.ErrNoChange && err != nil {
-		return nil, fmt.Errorf("migrate up: %w", err)
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create pool: %w", err)
-	}
-
-	return &linkStorage{
+	return &SQLStorage{
 		pool:    pool,
 		timeout: timeout,
 	}, nil
 }
 
-func (ls *linkStorage) RegisterChat(ctx context.Context, chatID int64) error {
+func (ls *SQLStorage) RegisterChat(ctx context.Context, chatID int64) error {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
 	_, err := ls.pool.Exec(ctx, `insert into chats(chat_id) values ($1)`, chatID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return domain.ErrChatAlreadyExist{}
+		return domain.ChatAlreadyExistError{}
 	}
 	if err != nil {
 		return fmt.Errorf("register chat: %w", err)
@@ -73,14 +48,14 @@ func (ls *linkStorage) RegisterChat(ctx context.Context, chatID int64) error {
 	return nil
 }
 
-func (ls *linkStorage) DeleteChat(ctx context.Context, chatID int64) error {
+func (ls *SQLStorage) DeleteChat(ctx context.Context, chatID int64) error {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
 	var deletedID int64
 	err := ls.pool.QueryRow(ctx, `delete from chats where chat_id = $1 returning chat_id`, chatID).Scan(&deletedID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.ErrChatNotExist{}
+		return domain.ChatNotExistError{}
 	}
 	if err != nil {
 		return fmt.Errorf("delete chat: %w", err)
@@ -89,7 +64,7 @@ func (ls *linkStorage) DeleteChat(ctx context.Context, chatID int64) error {
 	return nil
 }
 
-func (ls *linkStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
+func (ls *SQLStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -112,7 +87,7 @@ func (ls *linkStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
 	`)
 }
 
-func (ls *linkStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, error) {
+func (ls *SQLStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, error) {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -144,31 +119,7 @@ func (ls *linkStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, erro
 		chatID)
 }
 
-func (ls *linkStorage) getLinksByQuery(ctx context.Context, query string, args ...any) ([]Link, error) {
-	rows, err := ls.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	result := make([]Link, 0)
-
-	for rows.Next() {
-		var link Link
-		err = rows.Scan(&link.LinkID, &link.ChatID, &link.URL, &link.Tags, &link.LastUpdated)
-		if err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		result = append(result, link)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
-	}
-
-	return result, nil
-}
-
-func (ls *linkStorage) AddLink(ctx context.Context, chatID int64, request AddLinkInput) (_ Link, err error) {
+func (ls *SQLStorage) AddLink(ctx context.Context, chatID int64, request AddLinkInput) (_ Link, err error) {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -189,7 +140,7 @@ func (ls *linkStorage) AddLink(ctx context.Context, chatID int64, request AddLin
 		return Link{}, fmt.Errorf("check chat: %w", err)
 	}
 	if !chatExists {
-		return Link{}, domain.ErrChatNotExist{}
+		return Link{}, domain.ChatNotExistError{}
 	}
 
 	var link Link
@@ -202,7 +153,7 @@ func (ls *linkStorage) AddLink(ctx context.Context, chatID int64, request AddLin
 	err = tx.QueryRow(ctx, `insert into chats_links(chat_id, link_id) values ($1, $2) returning id`, chatID, link.LinkID).Scan(&chatsLinkID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return Link{}, domain.ErrAlreadyTracking{}
+		return Link{}, domain.AlreadyTrackingError{}
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("insert chats_links: %w", err)
@@ -227,7 +178,7 @@ func (ls *linkStorage) AddLink(ctx context.Context, chatID int64, request AddLin
 	return link, nil
 }
 
-func (ls *linkStorage) DeleteLink(ctx context.Context, chatID int64, request DeleteLinkInput) (_ Link, err error) {
+func (ls *SQLStorage) DeleteLink(ctx context.Context, chatID int64, request DeleteLinkInput) (_ Link, err error) {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -272,7 +223,7 @@ func (ls *linkStorage) DeleteLink(ctx context.Context, chatID int64, request Del
 		&link.Tags,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Link{}, domain.ErrChatOrLinkNotFound{}
+		return Link{}, domain.ChatOrLinkNotFoundError{}
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("find link: %w", err)
@@ -306,7 +257,7 @@ func (ls *linkStorage) DeleteLink(ctx context.Context, chatID int64, request Del
 	return link, nil
 }
 
-func (ls *linkStorage) GetLastUpdated(ctx context.Context, linkID int) (time.Time, error) {
+func (ls *SQLStorage) GetLastUpdated(ctx context.Context, linkID int) (time.Time, error) {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -321,7 +272,7 @@ func (ls *linkStorage) GetLastUpdated(ctx context.Context, linkID int) (time.Tim
 	return result, nil
 }
 
-func (ls *linkStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error) {
+func (ls *SQLStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -348,7 +299,7 @@ func (ls *linkStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]int6
 	return result, nil
 }
 
-func (ls *linkStorage) SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error {
+func (ls *SQLStorage) SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, ls.timeout)
 	defer cancel()
 
@@ -364,6 +315,64 @@ func (ls *linkStorage) SetLastUpdated(ctx context.Context, linkID int, lastUpdat
 	return nil
 }
 
-func (ls *linkStorage) Close() {
+func (ls *SQLStorage) Close() {
 	ls.pool.Close()
+}
+
+func initDBPool(dsn, migrations string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("sql open: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("driver: %w", err)
+	}
+
+	m, err := migrate.NewWithDatabaseInstance(migrations, "postgres", driver)
+	if err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
+	if err = m.Up(); !errors.Is(err, migrate.ErrNoChange) && err != nil {
+		return nil, fmt.Errorf("migrate up: %w", err)
+	}
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create pool: %w", err)
+	}
+
+	return pool, nil
+}
+
+func (ls *SQLStorage) getLinksByQuery(ctx context.Context, query string, args ...any) ([]Link, error) {
+	rows, err := ls.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]Link, 0)
+
+	for rows.Next() {
+		var link Link
+		err = rows.Scan(&link.LinkID, &link.ChatID, &link.URL, &link.Tags, &link.LastUpdated)
+		if err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		result = append(result, link)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+
+	return result, nil
 }

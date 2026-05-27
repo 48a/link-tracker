@@ -4,8 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/caarlos0/env/v11"
+)
+
+const (
+	stopTimeout        = time.Duration(5) * time.Second
+	restTimeout        = time.Duration(5) * time.Second
+	linkstorageTimeout = time.Duration(5) * time.Second
 )
 
 type config struct {

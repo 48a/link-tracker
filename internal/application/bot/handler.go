@@ -18,6 +18,10 @@ const (
 	UntrackAskLink
 )
 
+const (
+	cancelOperation = "cancelled operation"
+)
+
 func (b *Bot) handleMessage(ctx context.Context, message string, chatID int64) string {
 	userState, _, err := b.userStorage.GetUserState(ctx, chatID)
 	if err != nil {
@@ -48,7 +52,7 @@ func (b *Bot) handleMessage(ctx context.Context, message string, chatID int64) s
 
 func (b *Bot) handleUnregistered(ctx context.Context, message string, chatID int64) string {
 	switch message {
-	case "/start":
+	case startCommand:
 		if err := b.client.RegisterChat(ctx, chatID); err != nil {
 			b.logger.Error("register chat", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
 			return fmt.Sprintf("client error: %v", err)
@@ -61,19 +65,66 @@ func (b *Bot) handleUnregistered(ctx context.Context, message string, chatID int
 
 		return "registered"
 
-	case "/help":
+	case helpCommand:
 		return "help message"
 	}
 
 	return "register first"
 }
 
+func (b *Bot) handleList(ctx context.Context, message string, chatID int64) string {
+	command := strings.Split(message[5:], ",")
+	hasTag := make(map[string]struct{})
+	for i := range command {
+		trimmed := strings.TrimSpace(command[i])
+		if trimmed != "" {
+			hasTag[trimmed] = struct{}{}
+		}
+	}
+
+	links, err := b.client.GetLinks(ctx, chatID)
+	if err != nil {
+		b.logger.Error("get links", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
+		return fmt.Sprintf("client error: %v", err)
+	}
+
+	if links.Links == nil {
+		b.logger.Error("get links", slog.String("error", "nil link slice received"))
+		return "internal error"
+	}
+
+	if len(links.Links) != links.Size {
+		b.logger.Error("get links", slog.String("error", "slice sizes didn't match"))
+		return "internal error"
+	}
+
+	responseMessage := []string{}
+	for linkNumber := range links.Size {
+		if links.Links[linkNumber].Tags == nil || len(hasTag) == 0 {
+			responseMessage = append(responseMessage, links.Links[linkNumber].URL+" tags: "+strings.Join(links.Links[linkNumber].Tags, ", "))
+			continue
+		}
+
+		for _, linkTag := range links.Links[linkNumber].Tags {
+			if _, ok := hasTag[linkTag]; ok {
+				responseMessage = append(responseMessage, links.Links[linkNumber].URL+" tags: "+strings.Join(links.Links[linkNumber].Tags, ", "))
+			}
+		}
+	}
+
+	if len(responseMessage) == 0 {
+		return "no links being tracked"
+	}
+
+	return "your link(s): " + strings.Join(responseMessage, "\n")
+}
+
 func (b *Bot) handleDefault(ctx context.Context, message string, chatID int64) string {
 	switch message {
-	case "/start":
+	case startCommand:
 		return "already registered"
 
-	case "/help":
+	case helpCommand:
 		return "help message"
 
 	case "/track":
@@ -92,7 +143,7 @@ func (b *Bot) handleDefault(ctx context.Context, message string, chatID int64) s
 
 		return "send a link to be untracked"
 
-	case "/cancel":
+	case cancelCommand:
 		return "nothing to cancel"
 
 	case "/stop":
@@ -110,63 +161,20 @@ func (b *Bot) handleDefault(ctx context.Context, message string, chatID int64) s
 	}
 
 	if strings.HasPrefix(message, "/list") {
-		command := strings.Split(message[5:], ",")
-		hasTag := make(map[string]struct{})
-		for i := range command {
-			trimmed := strings.TrimSpace(command[i])
-			if trimmed != "" {
-				hasTag[trimmed] = struct{}{}
-			}
-		}
-
-		links, err := b.client.GetLinks(ctx, chatID)
-		if err != nil {
-			b.logger.Error("get links", slog.String("error", err.Error()), slog.Int64("chatID", chatID))
-			return fmt.Sprintf("client error: %v", err)
-		}
-
-		if links.Links == nil {
-			b.logger.Error("get links", slog.String("error", "nil link slice received"))
-			return "internal error"
-		}
-
-		if len(links.Links) != links.Size {
-			b.logger.Error("get links", slog.String("error", "slice sizes didn't match"))
-			return "internal error"
-		}
-
-		responseMessage := []string{}
-		for linkNumber := range links.Size {
-			if links.Links[linkNumber].Tags == nil || len(hasTag) == 0 {
-				responseMessage = append(responseMessage, links.Links[linkNumber].URL+" tags: "+strings.Join(links.Links[linkNumber].Tags, ", "))
-				continue
-			}
-
-			for _, linkTag := range links.Links[linkNumber].Tags {
-				if _, ok := hasTag[linkTag]; ok {
-					responseMessage = append(responseMessage, links.Links[linkNumber].URL+" tags: "+strings.Join(links.Links[linkNumber].Tags, ", "))
-				}
-			}
-		}
-
-		if len(responseMessage) == 0 {
-			return "no links being tracked"
-		}
-
-		return "your link(s): " + strings.Join(responseMessage, "\n")
+		return b.handleList(ctx, message, chatID)
 	}
 
 	return "invalid command"
 }
 
 func (b *Bot) handleTrackAskLink(ctx context.Context, message string, chatID int64) string {
-	if message == "/cancel" {
+	if message == cancelCommand {
 		if err := b.userStorage.SetUserState(ctx, chatID, Default); err != nil {
 			b.logger.Error("set user state", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.Int("userState", Default))
 			return fmt.Sprintf("database error: %v", err)
 		}
 
-		return "cancelled operation"
+		return cancelOperation
 	}
 
 	if linkkind.Kind(message) == "none" {
@@ -192,13 +200,13 @@ func (b *Bot) handleTrackAskLink(ctx context.Context, message string, chatID int
 }
 
 func (b *Bot) handleTrackAskTags(ctx context.Context, message string, chatID int64) string {
-	if message == "/cancel" {
+	if message == cancelCommand {
 		if err := b.userStorage.SetUserState(ctx, chatID, Default); err != nil {
 			b.logger.Error("set user state", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.Int("userState", Default))
 			return fmt.Sprintf("database error: %v", err)
 		}
 
-		return "cancelled operation"
+		return cancelOperation
 	}
 
 	tags := strings.Split(message, ",")
@@ -229,7 +237,7 @@ func (b *Bot) handleTrackAskTags(ctx context.Context, message string, chatID int
 		URL:  req.URL,
 		Tags: req.Tags,
 	}
-	if err := b.client.AddLink(ctx, chatID, addLinkRequest); err != nil {
+	if err = b.client.AddLink(ctx, chatID, addLinkRequest); err != nil {
 		b.logger.Error("add link", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.String("addLinkRequest", fmt.Sprintf("%#v", addLinkRequest)))
 		return fmt.Sprintf("client error: %v", err)
 	}
@@ -238,13 +246,13 @@ func (b *Bot) handleTrackAskTags(ctx context.Context, message string, chatID int
 }
 
 func (b *Bot) handleUntrackAskLink(ctx context.Context, message string, chatID int64) string {
-	if message == "/cancel" {
+	if message == cancelCommand {
 		if err := b.userStorage.SetUserState(ctx, chatID, Default); err != nil {
 			b.logger.Error("set user state", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.Int("userState", Default))
 			return fmt.Sprintf("database error: %v", err)
 		}
 
-		return "cancelled operation"
+		return cancelOperation
 	}
 
 	if err := b.userStorage.SetRequestURL(ctx, chatID, message); err != nil {
@@ -261,7 +269,7 @@ func (b *Bot) handleUntrackAskLink(ctx context.Context, message string, chatID i
 	deleteLinkRequest := scrapperapi.DeleteLinkRequest{
 		URL: req.URL,
 	}
-	if err := b.client.DeleteLink(ctx, chatID, deleteLinkRequest); err != nil {
+	if err = b.client.DeleteLink(ctx, chatID, deleteLinkRequest); err != nil {
 		b.logger.Error("delete link", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.String("deleteLinkRequest", fmt.Sprintf("%#v", deleteLinkRequest)))
 
 		if err1 := b.userStorage.SetUserState(ctx, chatID, Default); err1 != nil {
@@ -272,7 +280,7 @@ func (b *Bot) handleUntrackAskLink(ctx context.Context, message string, chatID i
 		return fmt.Sprintf("can't send delete link request: %v", err)
 	}
 
-	if err := b.userStorage.SetUserState(ctx, chatID, Default); err != nil {
+	if err = b.userStorage.SetUserState(ctx, chatID, Default); err != nil {
 		b.logger.Error("set user state", slog.String("error", err.Error()), slog.Int64("chatID", chatID), slog.Int("userState", Default))
 		return fmt.Sprintf("database error: %v", err)
 	}

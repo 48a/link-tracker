@@ -1,25 +1,25 @@
 package domain
 
-type ErrChatNotExist struct{}
+type ChatNotExistError struct{}
 
-func (ErrChatNotExist) Error() string {
+func (ChatNotExistError) Error() string {
 	return "chat doesn't exist"
 }
 
-type ErrChatAlreadyExist struct{}
+type ChatAlreadyExistError struct{}
 
-func (ErrChatAlreadyExist) Error() string {
+func (ChatAlreadyExistError) Error() string {
 	return "chat already exist"
 }
 
-type ErrAlreadyTracking struct{}
+type AlreadyTrackingError struct{}
 
-func (ErrAlreadyTracking) Error() string {
+func (AlreadyTrackingError) Error() string {
 	return "link already being tracked"
 }
 
-type ErrChatOrLinkNotFound struct{}
+type ChatOrLinkNotFoundError struct{}
 
-func (ErrChatOrLinkNotFound) Error() string {
+func (ChatOrLinkNotFoundError) Error() string {
 	return "link already being tracked"
 }

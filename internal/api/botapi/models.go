@@ -7,7 +7,7 @@ type LinkUpdate struct {
 	TgChatIDs   []int64 `json:"tgChatIds"`
 }
 
-type ApiErrorResponse struct {
+type APIErrorResponse struct {
 	Description      string   `json:"description"`
 	Code             string   `json:"code"`
 	ExceptionName    string   `json:"exceptionName"`

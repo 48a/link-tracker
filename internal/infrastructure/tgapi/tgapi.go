@@ -1,11 +1,14 @@
 package tgapi
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
+
+const maxLen = 4090
 
 type TgAPI struct {
 	bot *tgbotapi.BotAPI
@@ -22,7 +25,7 @@ type Commands struct {
 	Description string
 }
 
-func NewTgApi(token string) (TgAPI, error) {
+func NewTgAPI(token string) (TgAPI, error) {
 	res := TgAPI{}
 	var err error
 
@@ -34,7 +37,7 @@ func NewTgApi(token string) (TgAPI, error) {
 	}
 
 	if err != nil {
-		return TgAPI{}, err
+		return TgAPI{}, fmt.Errorf("new bot: %w", err)
 	}
 	return res, nil
 }
@@ -46,7 +49,10 @@ func (t TgAPI) SetupCommands(cmds []Commands) (int, error) {
 	}
 	config := tgbotapi.NewSetMyCommands(botCmds...)
 	resp, err := t.bot.Request(config)
-	return resp.ErrorCode, err
+	if err != nil {
+		return resp.ErrorCode, fmt.Errorf("setup commands: %w", err)
+	}
+	return resp.ErrorCode, nil
 }
 
 func (t TgAPI) GetMessagesChan() <-chan Update {
@@ -72,7 +78,10 @@ func (t TgAPI) GetMessagesChan() <-chan Update {
 }
 
 func (t TgAPI) SendMessage(chatID int64, message string) error {
-	msg := tgbotapi.NewMessage(chatID, message[:min(len(message), 4090)])
+	msg := tgbotapi.NewMessage(chatID, message[:min(len(message), maxLen)])
 	_, err := t.bot.Send(msg)
-	return err
+	if err != nil {
+		return fmt.Errorf("telegram send message: %w", err)
+	}
+	return nil
 }

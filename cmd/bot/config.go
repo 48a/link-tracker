@@ -8,6 +8,8 @@ import (
 	"github.com/caarlos0/env/v11"
 )
 
+const storageTimeout = 5
+
 type config struct {
 	KafkaUser          string   `env:"KAFKA_USER"`
 	KafkaPassword      string   `env:"KAFKA_PASSWORD"`

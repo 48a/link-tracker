@@ -1,8 +1,10 @@
 package consumer
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -43,7 +45,7 @@ func (h *Handler) Cleanup(sarama.ConsumerGroupSession) error {
 func (h *Handler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
 		if len(message.Value) < 5 || message.Value[0] != 0 {
-			return fmt.Errorf("invalid message format: missing magic byte")
+			return errors.New("invalid message format: missing magic byte")
 		}
 
 		schemaID := binary.BigEndian.Uint32(message.Value[1:5])
@@ -65,19 +67,23 @@ func (h *Handler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama
 		}
 
 		var sendUpdate botapi.LinkUpdate
-		if id, ok := record["id"].(int64); ok {
+		var id int64
+		if id, ok = record["id"].(int64); ok {
 			sendUpdate.ID = id
 		}
-		if url, ok := record["url"].(string); ok {
+		var url string
+		if url, ok = record["url"].(string); ok {
 			sendUpdate.URL = url
 		}
-		if desc, ok := record["description"].(string); ok {
+		var desc string
+		if desc, ok = record["description"].(string); ok {
 			sendUpdate.Description = desc
 		}
 
-		if tgChatIdsRaw, ok := record["tgChatIds"].([]interface{}); ok {
-			for _, idRaw := range tgChatIdsRaw {
-				if id, ok := idRaw.(int64); ok {
+		var tgChatIDsRaw []interface{}
+		if tgChatIDsRaw, ok = record["tgChatIds"].([]interface{}); ok {
+			for _, idRaw := range tgChatIDsRaw {
+				if id, ok = idRaw.(int64); ok {
 					sendUpdate.TgChatIDs = append(sendUpdate.TgChatIDs, id)
 				}
 			}
@@ -108,24 +114,30 @@ func (h *Handler) getCodec(id uint32) (*goavro.Codec, error) {
 	}
 	h.mu.RUnlock()
 
-	resp, err := http.Get(fmt.Sprintf("%s/schemas/ids/%d", h.schemaRegistryURL, id))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("%s/schemas/ids/%d", h.schemaRegistryURL, id), nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-	defer resp.Body.Close()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("schema registry returned status %d", resp.StatusCode)
 	}
 
 	var srResp srSchemaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&srResp); err != nil {
-		return nil, err
+	if err = json.NewDecoder(resp.Body).Decode(&srResp); err != nil {
+		return nil, fmt.Errorf("decode response body: %w", err)
 	}
 
 	parsedCodec, err := goavro.NewCodec(srResp.Schema)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new codec: %w", err)
 	}
 
 	h.mu.Lock()

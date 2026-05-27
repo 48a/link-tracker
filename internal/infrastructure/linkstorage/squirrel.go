@@ -2,15 +2,11 @@ package linkstorage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,48 +15,25 @@ import (
 
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-type squirrelStorage struct {
+type SquirrelStorage struct {
 	pool    *pgxpool.Pool
 	timeout time.Duration
 }
 
-func NewSquirrelStorage(dsn string, timeout time.Duration, migrations string) (*squirrelStorage, error) {
-	cfg, err := pgxpool.ParseConfig(dsn)
+func NewSquirrelStorage(dsn string, timeout time.Duration, migrations string) (*SquirrelStorage, error) {
+	pool, err := initDBPool(dsn, migrations)
 	if err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+		return nil, err
 	}
 
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("sql open: %w", err)
-	}
-
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
-	if err != nil {
-		return nil, fmt.Errorf("driver: %w", err)
-	}
-
-	m, err := migrate.NewWithDatabaseInstance(migrations, "postgres", driver)
-	if err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	if err = m.Up(); err != migrate.ErrNoChange && err != nil {
-		return nil, fmt.Errorf("migrate up: %w", err)
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create pool: %w", err)
-	}
-
-	return &squirrelStorage{
+	return &SquirrelStorage{
 		pool:    pool,
 		timeout: timeout,
 	}, nil
+
 }
 
-func (ss *squirrelStorage) RegisterChat(ctx context.Context, chatID int64) error {
+func (ss *SquirrelStorage) RegisterChat(ctx context.Context, chatID int64) error {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -75,7 +48,7 @@ func (ss *squirrelStorage) RegisterChat(ctx context.Context, chatID int64) error
 	_, err = ss.pool.Exec(ctx, query, args...)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return domain.ErrChatAlreadyExist{}
+		return domain.ChatAlreadyExistError{}
 	}
 	if err != nil {
 		return fmt.Errorf("register chat: %w", err)
@@ -84,7 +57,7 @@ func (ss *squirrelStorage) RegisterChat(ctx context.Context, chatID int64) error
 	return nil
 }
 
-func (ss *squirrelStorage) DeleteChat(ctx context.Context, chatID int64) error {
+func (ss *SquirrelStorage) DeleteChat(ctx context.Context, chatID int64) error {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -99,7 +72,7 @@ func (ss *squirrelStorage) DeleteChat(ctx context.Context, chatID int64) error {
 	var deletedID int64
 	err = ss.pool.QueryRow(ctx, query, args...).Scan(&deletedID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.ErrChatNotExist{}
+		return domain.ChatNotExistError{}
 	}
 	if err != nil {
 		return fmt.Errorf("delete chat: %w", err)
@@ -122,7 +95,7 @@ func baseLinksQuery() sq.SelectBuilder {
 		GroupBy("cl.id", "cl.link_id", "cl.chat_id", "l.url", "l.last_updated")
 }
 
-func (ss *squirrelStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
+func (ss *SquirrelStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -133,7 +106,7 @@ func (ss *squirrelStorage) GetAllLinks(ctx context.Context) ([]Link, error) {
 	return ss.getLinksByQuery(ctx, query, args...)
 }
 
-func (ss *squirrelStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, error) {
+func (ss *SquirrelStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, error) {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -146,31 +119,8 @@ func (ss *squirrelStorage) GetLinks(ctx context.Context, chatID int64) ([]Link, 
 	return ss.getLinksByQuery(ctx, query, args...)
 }
 
-func (ss *squirrelStorage) getLinksByQuery(ctx context.Context, query string, args ...any) ([]Link, error) {
-	rows, err := ss.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	result := make([]Link, 0)
-
-	for rows.Next() {
-		var link Link
-		err = rows.Scan(&link.LinkID, &link.ChatID, &link.URL, &link.Tags, &link.LastUpdated)
-		if err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		result = append(result, link)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
-	}
-
-	return result, nil
-}
-
-func (ss *squirrelStorage) AddLink(ctx context.Context, chatID int64, request AddLinkInput) (_ Link, err error) {
+//nolint:funlen
+func (ss *SquirrelStorage) AddLink(ctx context.Context, chatID int64, request AddLinkInput) (_ Link, err error) {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -200,7 +150,7 @@ func (ss *squirrelStorage) AddLink(ctx context.Context, chatID int64, request Ad
 		return Link{}, fmt.Errorf("check chat: %w", err)
 	}
 	if !chatExists {
-		return Link{}, domain.ErrChatNotExist{}
+		return Link{}, domain.ChatNotExistError{}
 	}
 
 	query, args, err = psql.Insert("links").
@@ -231,7 +181,7 @@ func (ss *squirrelStorage) AddLink(ctx context.Context, chatID int64, request Ad
 	err = tx.QueryRow(ctx, query, args...).Scan(&chatsLinkID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return Link{}, domain.ErrAlreadyTracking{}
+		return Link{}, domain.AlreadyTrackingError{}
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("insert chats_links: %w", err)
@@ -264,7 +214,8 @@ func (ss *squirrelStorage) AddLink(ctx context.Context, chatID int64, request Ad
 	return link, nil
 }
 
-func (ss *squirrelStorage) DeleteLink(ctx context.Context, chatID int64, request DeleteLinkInput) (_ Link, err error) {
+//nolint:funlen
+func (ss *SquirrelStorage) DeleteLink(ctx context.Context, chatID int64, request DeleteLinkInput) (_ Link, err error) {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -305,7 +256,7 @@ func (ss *squirrelStorage) DeleteLink(ctx context.Context, chatID int64, request
 		&link.Tags,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Link{}, domain.ErrChatOrLinkNotFound{}
+		return Link{}, domain.ChatOrLinkNotFoundError{}
 	}
 	if err != nil {
 		return Link{}, fmt.Errorf("find link: %w", err)
@@ -356,7 +307,7 @@ func (ss *squirrelStorage) DeleteLink(ctx context.Context, chatID int64, request
 	return link, nil
 }
 
-func (ss *squirrelStorage) GetLastUpdated(ctx context.Context, linkID int) (time.Time, error) {
+func (ss *SquirrelStorage) GetLastUpdated(ctx context.Context, linkID int) (time.Time, error) {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -377,7 +328,7 @@ func (ss *squirrelStorage) GetLastUpdated(ctx context.Context, linkID int) (time
 	return result, nil
 }
 
-func (ss *squirrelStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error) {
+func (ss *SquirrelStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -402,7 +353,7 @@ func (ss *squirrelStorage) GetUsersWithLink(ctx context.Context, linkID int) ([]
 	return result, nil
 }
 
-func (ss *squirrelStorage) SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error {
+func (ss *SquirrelStorage) SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, ss.timeout)
 	defer cancel()
 
@@ -426,6 +377,30 @@ func (ss *squirrelStorage) SetLastUpdated(ctx context.Context, linkID int, lastU
 	return nil
 }
 
-func (ss *squirrelStorage) Close() {
+func (ss *SquirrelStorage) Close() {
 	ss.pool.Close()
+}
+
+func (ss *SquirrelStorage) getLinksByQuery(ctx context.Context, query string, args ...any) ([]Link, error) {
+	rows, err := ss.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]Link, 0)
+
+	for rows.Next() {
+		var link Link
+		err = rows.Scan(&link.LinkID, &link.ChatID, &link.URL, &link.Tags, &link.LastUpdated)
+		if err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		result = append(result, link)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+
+	return result, nil
 }

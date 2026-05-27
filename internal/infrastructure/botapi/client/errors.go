@@ -6,95 +6,119 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/botapi"
 )
 
-type ErrTimedOut struct{}
+type TimedoutError struct{}
 
-func (ErrTimedOut) Error() string {
+func (TimedoutError) Error() string {
 	return "request timed out"
 }
 
-type ErrUnknownStatusCode struct {
+type UnknownStatusCodeError struct {
 	operation string
 }
 
-func (e ErrUnknownStatusCode) Error() string {
+func (e UnknownStatusCodeError) Error() string {
 	return e.operation + ": unknown status code received"
 }
 
-type ErrCantCreateRequest struct {
+type CreateRequestError struct {
 	operation string
 	wrapped   error
 }
 
-func (e ErrCantCreateRequest) Error() string {
+func (e CreateRequestError) Error() string {
 	return e.operation + ": can't create request"
 }
 
-func (e ErrCantCreateRequest) Unwrap() error {
+func (e CreateRequestError) Unwrap() error {
 	return e.wrapped
 }
 
-type ErrCantDoRequest struct {
+type DoRequestError struct {
 	operation string
 	wrapped   error
 }
 
-func (e ErrCantDoRequest) Error() string {
+func (e DoRequestError) Error() string {
 	return e.operation + ": can't do request"
 }
 
-func (e ErrCantDoRequest) Unwrap() error {
+func (e DoRequestError) Unwrap() error {
 	return e.wrapped
 }
 
-type ErrCantUnmarshalResponse struct {
+type UnmarshalResponseError struct {
 	operation string
 	wrapped   error
 }
 
-func (e ErrCantUnmarshalResponse) Error() string {
+func (e UnmarshalResponseError) Error() string {
 	return e.operation + ": can't unmarshal response body"
 }
 
-func (e ErrCantUnmarshalResponse) Unwrap() error {
+func (e UnmarshalResponseError) Unwrap() error {
 	return e.wrapped
 }
 
-type ErrCantReadResponse struct {
+type ReadResponseError struct {
 	operation string
 	wrapped   error
 }
 
-func (e ErrCantReadResponse) Error() string {
+func (e ReadResponseError) Error() string {
 	return "cant read response body"
 }
 
-func (e ErrCantReadResponse) Unwrap() error {
+func (e ReadResponseError) Unwrap() error {
 	return e.wrapped
 }
 
-type ErrCantMarshalRequest struct {
+type MarshalRequestError struct {
 	operation string
 	wrapped   error
 }
 
-func (e ErrCantMarshalRequest) Error() string {
+func (e MarshalRequestError) Error() string {
 	return e.operation + ": can't marshal request"
 }
 
-func (e ErrCantMarshalRequest) Unwrap() error {
+func (e MarshalRequestError) Unwrap() error {
 	return e.wrapped
 }
 
-type ApiError struct {
+type IDMismatchError struct {
+	operation string
+}
+
+func (e IDMismatchError) Error() string {
+	return e.operation + ": response chat id mismatch"
+}
+
+type LinkMismatchError struct {
+	operation string
+}
+
+func (e LinkMismatchError) Error() string {
+	return e.operation + ": response link mismatch"
+}
+
+type TagsMismatchError struct {
+	operation string
+}
+
+func (e TagsMismatchError) Error() string {
+	return e.operation + ": response tags mismatch"
+}
+
+type APIError struct {
 	operation     string
 	StatusCode    int
-	ErrorResponse botapi.ApiErrorResponse
+	ErrorResponse botapi.APIErrorResponse
 }
 
-func NewApiError(statusCode int, errorResponse botapi.ApiErrorResponse, operation string) ApiError {
-	return ApiError{StatusCode: statusCode, ErrorResponse: errorResponse, operation: operation}
+func NewAPIError(statusCode int, errorResponse botapi.APIErrorResponse, operation string) APIError {
+	return APIError{StatusCode: statusCode, ErrorResponse: errorResponse, operation: operation}
 }
 
-func (a ApiError) Error() string {
+func (a APIError) Error() string {
 	return fmt.Sprintf("%s: received status code %v and response %#v", a.operation, a.StatusCode, a.ErrorResponse)
 }

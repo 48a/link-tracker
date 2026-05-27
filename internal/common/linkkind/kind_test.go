@@ -1,8 +1,14 @@
-package linkkind
+package linkkind_test
 
-import "testing"
+import (
+	"testing"
+
+	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/common/linkkind"
+)
 
 func TestKind(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		rawURL   string
@@ -38,7 +44,7 @@ func TestKind(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := Kind(tt.rawURL)
+			result := linkkind.Kind(tt.rawURL)
 			if result != tt.expected {
 				t.Errorf("Kind(%q) = %v; want %v", tt.rawURL, result, tt.expected)
 			}

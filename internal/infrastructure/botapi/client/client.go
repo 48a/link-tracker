@@ -13,7 +13,7 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/botapi"
 )
 
-type restClient struct {
+type RESTClient struct {
 	baseURL string
 	cl      *http.Client
 	timeout time.Duration
@@ -24,45 +24,19 @@ type responseData struct {
 	statusCode int
 }
 
-func NewRestClient(url string, timeout time.Duration) restClient {
-	return restClient{baseURL: url, cl: http.DefaultClient, timeout: timeout}
+func NewRestClient(url string, timeout time.Duration) RESTClient {
+	return RESTClient{baseURL: url, cl: http.DefaultClient, timeout: timeout}
 }
 
-func (c restClient) restApiRequest(operation, method, url string, requestBody io.Reader) (responseData, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, method, url, requestBody)
-	if err != nil {
-		return responseData{}, ErrCantCreateRequest{operation: operation, wrapped: err}
-	}
-
-	resp, err := c.cl.Do(req)
-	if errors.Is(err, context.DeadlineExceeded) {
-		return responseData{}, ErrCantDoRequest{operation: operation, wrapped: ErrTimedOut{}}
-	}
-	if err != nil {
-		return responseData{}, ErrCantDoRequest{operation: operation, wrapped: err}
-	}
-	defer resp.Body.Close()
-
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return responseData{}, ErrCantReadResponse{operation: operation, wrapped: err}
-	}
-
-	return responseData{body: b, statusCode: resp.StatusCode}, nil
-}
-
-func (c restClient) SendUpdate(linkUpdate botapi.LinkUpdate) error {
+func (c RESTClient) SendUpdate(linkUpdate botapi.LinkUpdate) error {
 	operation := fmt.Sprintf("send link update %#v", linkUpdate)
 
 	body, err := json.Marshal(linkUpdate)
 	if err != nil {
-		return ErrCantMarshalRequest{operation: operation, wrapped: err}
+		return MarshalRequestError{operation: operation, wrapped: err}
 	}
 
-	resp, err := c.restApiRequest(
+	resp, err := c.restAPIRequest(
 		operation,
 		"POST",
 		c.baseURL+"/updates",
@@ -72,18 +46,44 @@ func (c restClient) SendUpdate(linkUpdate botapi.LinkUpdate) error {
 		return err
 	}
 
-	if resp.statusCode == 200 {
+	if resp.statusCode == http.StatusOK {
 		return nil
 	}
 
-	var responseError botapi.ApiErrorResponse
+	var responseError botapi.APIErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
-		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
+		return UnmarshalResponseError{operation: operation, wrapped: err}
 	}
 
-	if resp.statusCode == 400 {
-		return NewApiError(400, responseError, operation)
+	if resp.statusCode == http.StatusBadRequest {
+		return NewAPIError(http.StatusBadRequest, responseError, operation)
 	}
-	return ErrUnknownStatusCode{operation: operation}
+	return UnknownStatusCodeError{operation: operation}
+}
+
+func (c RESTClient) restAPIRequest(operation, method, url string, requestBody io.Reader) (responseData, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, url, requestBody)
+	if err != nil {
+		return responseData{}, CreateRequestError{operation: operation, wrapped: err}
+	}
+
+	resp, err := c.cl.Do(req)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return responseData{}, DoRequestError{operation: operation, wrapped: TimedoutError{}}
+	}
+	if err != nil {
+		return responseData{}, DoRequestError{operation: operation, wrapped: err}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return responseData{}, ReadResponseError{operation: operation, wrapped: err}
+	}
+
+	return responseData{body: b, statusCode: resp.StatusCode}, nil
 }

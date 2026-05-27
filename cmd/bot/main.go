@@ -12,9 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/bot"
 	botconsumer "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/consumer"
-
 	botserver "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/botapi/server"
 	scrapper "gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/scrapperapi/client"
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/tgapi"
@@ -42,23 +43,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("verifying token..")
-
-	api, err := tgapi.NewTgApi(cfg.Token)
+	api, err := tgapi.NewTgAPI(cfg.Token)
 	if err != nil {
 		logger.Error("create tg api bot", slog.String("error", err.Error()))
-		os.Exit(2)
+		return
 	}
 
-	logger.Info("success!!!")
-
-	storage, err := userstorage.NewPgStorage(cfg.toDSN(), 5)
+	storage, err := userstorage.NewPgStorage(cfg.toDSN(), storageTimeout)
 	if err != nil {
 		logger.Error("create user storage", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	scrapperClient := scrapper.NewClient(scrapper.Config{
+	b := bot.NewBot(logger, api, storage, buildScrapperClient(cfg))
+
+	consumer, srv, cleanup, err := setupCommunication(cfg, b, logger)
+	if err != nil {
+		logger.Error("setup communication", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer cleanup()
+
+	runWaitgroups(cfg, b, consumer, srv, logger)
+}
+
+func buildScrapperClient(cfg *config) scrapper.Client {
+	return scrapper.NewClient(scrapper.Config{
 		BaseURL:          "http://scrapper:8001",
 		Timeout:          time.Duration(cfg.Timeout) * time.Second,
 		RetryAttempts:    uint(cfg.RetryAttempts),
@@ -67,46 +77,39 @@ func main() {
 		CBMinRequests:    uint32(cfg.CBMinRequests),
 		CBOpenWindow:     time.Duration(cfg.CBOpenWindow) * time.Second,
 	})
+}
 
-	bot := bot.NewBot(logger, api, storage, scrapperClient)
-
-	handler := botconsumer.NewHandler(bot, cfg.SchemaRegistryURL)
-
+func setupCommunication(cfg *config, b *bot.Bot, logger *slog.Logger) (botconsumer.Consumer, *botserver.Server, func(), error) {
 	var consumer botconsumer.Consumer
 	var srv *botserver.Server
+	cleanup := func() {}
 
 	switch cfg.CommunicationType {
 	case "KAFKA":
-		consumer, err = botconsumer.NewConsumer(
-			handler,
-			cfg.KafkaBroker,
-			cfg.KafkaUser,
-			cfg.KafkaPassword,
-			cfg.KafkaConsumerGroup,
-			cfg.KafkaTopic,
-			logger,
+		handler := botconsumer.NewHandler(b, cfg.SchemaRegistryURL)
+		c, err := botconsumer.NewConsumer(
+			handler, cfg.KafkaBroker, cfg.KafkaUser, cfg.KafkaPassword,
+			cfg.KafkaConsumerGroup, cfg.KafkaTopic, logger,
 		)
 		if err != nil {
-			logger.Error("new consumer", slog.String("error", err.Error()))
-			os.Exit(1)
+			return consumer, srv, cleanup, fmt.Errorf("new consumer: %w", err)
 		}
-
-		defer func() {
-			if err := consumer.Close(); err != nil {
+		consumer = c
+		cleanup = func() {
+			if err = consumer.Close(); err != nil {
 				logger.Error("close consumer", slog.String("error", err.Error()))
-				os.Exit(1)
 			}
-		}()
-
+		}
 	case "HTTP":
-		handler := botserver.NewHandler(bot)
-		srv = botserver.NewServer(":8002", handler)
-
+		srv = botserver.NewServer(":8002", botserver.NewHandler(b))
 	default:
-		logger.Error("incorrect communication type", slog.String("communicationType", cfg.CommunicationType))
-		os.Exit(1)
+		return consumer, srv, cleanup, fmt.Errorf("incorrect communication type: %s", cfg.CommunicationType)
 	}
 
+	return consumer, srv, cleanup, nil
+}
+
+func runWaitgroups(cfg *config, b *bot.Bot, consumer botconsumer.Consumer, srv *botserver.Server, logger *slog.Logger) {
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 
@@ -118,28 +121,27 @@ func main() {
 	if cfg.CommunicationType == "KAFKA" {
 		logger.Info("start consumer")
 		wg.Go(func() { consumer.Serve(ctx) })
-	} else {
+	} else if srv != nil {
 		logger.Info("start server")
 		wg.Go(func() {
 			if err := srv.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("server run", slog.String("error", err.Error()))
 			}
 		})
-
 	}
 
 	logger.Info("start polling")
-	wg.Go(func() { bot.StartPolling(ctx) })
+	wg.Go(func() { b.StartPolling(ctx) })
 
 	<-sigterm
-
 	logger.Info("bot gracefully shutting down")
 
 	if srv != nil {
-		srv.Stop(ctx)
+		if err := srv.Stop(ctx); err != nil {
+			logger.Error("stop server", slog.String("error", err.Error()))
+		}
 	}
 
 	cancel()
-
 	wg.Wait()
 }

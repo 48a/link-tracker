@@ -19,6 +19,12 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/linkstorage"
 )
 
+type testCacheLink struct {
+	ID   int64    `json:"id"`
+	URL  string   `json:"url"`
+	Tags []string `json:"tags"`
+}
+
 func TestValkeyCacheIntegration(t *testing.T) {
 	ctx := context.Background()
 
@@ -36,7 +42,7 @@ func TestValkeyCacheIntegration(t *testing.T) {
 		t.Fatalf("failed to start valkey container: %v", err)
 	}
 	defer func() {
-		if err := valkeyContainer.Terminate(ctx); err != nil {
+		if err = valkeyContainer.Terminate(ctx); err != nil {
 			t.Fatalf("failed to terminate container: %v", err)
 		}
 	}()
@@ -92,6 +98,8 @@ func TestValkeyCacheIntegration(t *testing.T) {
 		t.Fatalf("first GetLinks call failed: %v", err)
 	}
 
+	time.Sleep(50 * time.Millisecond)
+
 	_, err = svc.GetLinks(chatID)
 	if err != nil {
 		t.Fatalf("second GetLinks call failed: %v", err)
@@ -110,9 +118,14 @@ func TestValkeyCacheIntegration(t *testing.T) {
 		t.Fatalf("failed to get raw cache key: %v", err)
 	}
 
-	var parsedLinks []domain.Link
-	if err := json.Unmarshal([]byte(val), &parsedLinks); err != nil {
+	var parsedCacheLinks []testCacheLink
+	if err = json.Unmarshal([]byte(val), &parsedCacheLinks); err != nil {
 		t.Fatalf("cached data is not in valid JSON format: %v", err)
+	}
+
+	parsedLinks := make([]domain.Link, len(parsedCacheLinks))
+	for i, cl := range parsedCacheLinks {
+		parsedLinks[i] = domain.Link{ID: cl.ID, URL: cl.URL, Tags: cl.Tags}
 	}
 
 	if len(parsedLinks) != 1 || parsedLinks[0].URL != "https://github.com/test/repo" {

@@ -1,35 +1,35 @@
 package userstorage
 
-type userStorage struct {
+type UserStorage struct {
 	chatState    map[int64]int
 	requestState map[int64]Request
 }
 
-func NewUserStorage() *userStorage {
-	return &userStorage{chatState: make(map[int64]int), requestState: make(map[int64]Request)}
+func NewUserStorage() *UserStorage {
+	return &UserStorage{chatState: make(map[int64]int), requestState: make(map[int64]Request)}
 }
 
-func (u *userStorage) GetUserState(userId int64) (int, bool) {
-	value, ok := u.chatState[userId]
+func (u *UserStorage) GetUserState(userID int64) (int, bool) {
+	value, ok := u.chatState[userID]
 	return value, ok
 }
 
-func (u *userStorage) SetUserState(userId int64, newState int) {
-	u.chatState[userId] = newState
+func (u *UserStorage) SetUserState(userID int64, newState int) {
+	u.chatState[userID] = newState
 }
 
-func (u *userStorage) SetRequestURL(userId int64, URL string) {
-	value := u.requestState[userId]
-	value.URL = URL
-	u.requestState[userId] = value
+func (u *UserStorage) SetRequestURL(userID int64, url string) {
+	value := u.requestState[userID]
+	value.URL = url
+	u.requestState[userID] = value
 }
 
-func (u *userStorage) SetRequestTags(userId int64, Tags []string) {
-	value := u.requestState[userId]
-	value.Tags = Tags
-	u.requestState[userId] = value
+func (u *UserStorage) SetRequestTags(userID int64, tags []string) {
+	value := u.requestState[userID]
+	value.Tags = tags
+	u.requestState[userID] = value
 }
 
-func (u *userStorage) GetRequest(chatId int64) Request {
-	return u.requestState[chatId]
+func (u *UserStorage) GetRequest(chatID int64) Request {
+	return u.requestState[chatID]
 }

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -72,8 +74,7 @@ func TestStorages(t *testing.T) {
 func runStorageTests(t *testing.T, s Storage, chatID int64) {
 	ctx := context.Background()
 
-	err := s.RegisterChat(ctx, chatID)
-	if err != nil {
+	if err := s.RegisterChat(ctx, chatID); err != nil {
 		t.Fatalf("failed to register chat: %v", err)
 	}
 

@@ -3,6 +3,7 @@ package stackoverflowfetcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 )
+
+const maxLen = 200
 
 type QuestionUpdates struct {
 	TopicTitle string
@@ -54,7 +57,7 @@ func NewFetcher(apiKey string, timeout int) *Fetcher {
 	}
 
 	return &Fetcher{
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: time.Duration(timeout) * time.Second},
 		apiKey:     apiKey,
 		timeout:    time.Duration(timeout) * time.Second,
 		baseURL:    baseURL,
@@ -106,19 +109,19 @@ func (f *Fetcher) fetchItems(ctx context.Context, reqURL string) ([]seItem, erro
 
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("User-Agent", "My-Stack-Fetcher-App")
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var apiResp seResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, err
+	if err = json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("decode response body: %w", err)
 	}
 
 	if apiResp.ErrorMessage != "" {
@@ -157,7 +160,7 @@ func (f *Fetcher) getQuestionTitle(ctx context.Context, qID string) (string, err
 	reqURL := fmt.Sprintf("%s/questions/%s?site=stackoverflow", f.baseURL, qID)
 	items, err := f.fetchItems(ctx, reqURL)
 	if err != nil || len(items) == 0 {
-		return "", fmt.Errorf("question not found or error: %v", err)
+		return "", fmt.Errorf("question not found or error: %w", err)
 	}
 	return html.UnescapeString(items[0].Title), nil
 }
@@ -170,8 +173,8 @@ func preparePreview(body string) string {
 	clean = strings.Join(strings.Fields(clean), " ")
 
 	runes := []rune(clean)
-	if len(runes) > 200 {
-		return string(runes[:200]) + "..."
+	if len(runes) > maxLen {
+		return string(runes[:maxLen]) + "..."
 	}
 	return clean
 }
@@ -179,7 +182,7 @@ func preparePreview(body string) string {
 func extractQuestionID(questionURL string) (string, error) {
 	u, err := url.Parse(questionURL)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse url: %w", err)
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	for i, part := range parts {
@@ -187,5 +190,5 @@ func extractQuestionID(questionURL string) (string, error) {
 			return parts[i+1], nil
 		}
 	}
-	return "", fmt.Errorf("could not find question ID in URL")
+	return "", errors.New("could not find question ID in URL")
 }

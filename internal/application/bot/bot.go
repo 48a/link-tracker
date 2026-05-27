@@ -11,6 +11,12 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/userstorage"
 )
 
+const (
+	startCommand  = "/start"
+	helpCommand   = "/help"
+	cancelCommand = "/cancel"
+)
+
 type telegramAPI interface {
 	GetMessagesChan() <-chan tgapi.Update
 	SendMessage(int64, string) error
@@ -45,19 +51,15 @@ func NewBot(logger *slog.Logger, api telegramAPI, userStorage storeUserState, cl
 	return &Bot{logger: logger, tgAPI: api, userStorage: userStorage, client: client}
 }
 
-func (b *Bot) stop() {
-	b.userStorage.Close()
-}
-
 func (b *Bot) StartPolling(ctx context.Context) {
 	if skipCommands := os.Getenv("SKIP_COMMANDS"); skipCommands != "TRUE" {
 		respCode, err := b.tgAPI.SetupCommands([]tgapi.Commands{
-			{Command: "/start", Description: "register chat"},
-			{Command: "/help", Description: "help command"},
+			{Command: startCommand, Description: "register chat"},
+			{Command: helpCommand, Description: "help command"},
 			{Command: "/track", Description: "track link"},
 			{Command: "/untrack", Description: "untrack link"},
 			{Command: "/list", Description: "list tracked links with optional tag"},
-			{Command: "/cancel", Description: "cancel input"},
+			{Command: cancelCommand, Description: "cancel input"},
 			{Command: "/stop", Description: "unregister chat"},
 		})
 		if err != nil {
@@ -102,4 +104,8 @@ func (b *Bot) SendUpdate(updateInput SendUpdateInput) {
 			b.logger.Error("send update", slog.Int64("chatID", chatID), slog.String("error", err.Error()))
 		}
 	}
+}
+
+func (b *Bot) stop() {
+	b.userStorage.Close()
 }

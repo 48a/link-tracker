@@ -14,17 +14,17 @@ type userData struct {
 	links          []Link
 }
 
-type linkStorageInMemory struct {
+type InMemory struct {
 	mu      sync.RWMutex
 	storage map[int64]userData
 	counter int
 }
 
-func NewLinkStorageInMemory() *linkStorageInMemory {
-	return &linkStorageInMemory{storage: make(map[int64]userData)}
+func NewInMemory() *InMemory {
+	return &InMemory{storage: make(map[int64]userData)}
 }
 
-func (ls *linkStorageInMemory) GetAllLinks(ctx context.Context) ([]Link, error) {
+func (ls *InMemory) GetAllLinks(_ context.Context) ([]Link, error) {
 	ls.mu.RLock()
 	defer ls.mu.RUnlock()
 
@@ -37,53 +37,53 @@ func (ls *linkStorageInMemory) GetAllLinks(ctx context.Context) ([]Link, error) 
 	return result, nil
 }
 
-func (ls *linkStorageInMemory) RegisterChat(ctx context.Context, chatID int64) error {
+func (ls *InMemory) RegisterChat(_ context.Context, chatID int64) error {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
 	data := ls.storage[chatID]
 	if data.chatRegistered {
-		return domain.ErrChatAlreadyExist{}
+		return domain.ChatAlreadyExistError{}
 	}
 	data.chatRegistered = true
 	ls.storage[chatID] = data
 	return nil
 }
 
-func (ls *linkStorageInMemory) DeleteChat(ctx context.Context, chatID int64) error {
+func (ls *InMemory) DeleteChat(_ context.Context, chatID int64) error {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
 	data := ls.storage[chatID]
 	if !data.chatRegistered {
-		return domain.ErrChatNotExist{}
+		return domain.ChatNotExistError{}
 	}
 	delete(ls.storage, chatID)
 	return nil
 }
 
-func (ls *linkStorageInMemory) GetLinks(ctx context.Context, chatID int64) ([]Link, error) {
+func (ls *InMemory) GetLinks(_ context.Context, chatID int64) ([]Link, error) {
 	ls.mu.RLock()
 	defer ls.mu.RUnlock()
 
 	data := ls.storage[chatID]
 	if !data.chatRegistered {
-		return []Link{}, domain.ErrChatNotExist{}
+		return []Link{}, domain.ChatNotExistError{}
 	}
 	return data.links, nil
 }
 
-func (ls *linkStorageInMemory) AddLink(ctx context.Context, chatID int64, request AddLinkInput) (Link, error) {
+func (ls *InMemory) AddLink(_ context.Context, chatID int64, request AddLinkInput) (Link, error) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
 	data := ls.storage[chatID]
 	if !data.chatRegistered {
-		return Link{}, domain.ErrChatNotExist{}
+		return Link{}, domain.ChatNotExistError{}
 	}
 	for i := range data.links {
 		if data.links[i].URL == request.URL {
-			return data.links[i], domain.ErrAlreadyTracking{}
+			return data.links[i], domain.AlreadyTrackingError{}
 		}
 	}
 	link := Link{
@@ -99,13 +99,13 @@ func (ls *linkStorageInMemory) AddLink(ctx context.Context, chatID int64, reques
 	return link, nil
 }
 
-func (ls *linkStorageInMemory) DeleteLink(ctx context.Context, chatID int64, request DeleteLinkInput) (Link, error) {
+func (ls *InMemory) DeleteLink(_ context.Context, chatID int64, request DeleteLinkInput) (Link, error) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
 	data := ls.storage[chatID]
 	if !data.chatRegistered {
-		return Link{}, domain.ErrChatOrLinkNotFound{}
+		return Link{}, domain.ChatOrLinkNotFoundError{}
 	}
 	for i := range data.links {
 		if data.links[i].URL == request.URL {
@@ -115,10 +115,10 @@ func (ls *linkStorageInMemory) DeleteLink(ctx context.Context, chatID int64, req
 			return result, nil
 		}
 	}
-	return Link{}, domain.ErrChatOrLinkNotFound{}
+	return Link{}, domain.ChatOrLinkNotFoundError{}
 }
 
-func (ls *linkStorageInMemory) GetLastUpdated(ctx context.Context, linkID int) (time.Time, error) {
+func (ls *InMemory) GetLastUpdated(_ context.Context, linkID int) (time.Time, error) {
 	ls.mu.RLock()
 	defer ls.mu.RUnlock()
 
@@ -129,10 +129,10 @@ func (ls *linkStorageInMemory) GetLastUpdated(ctx context.Context, linkID int) (
 			}
 		}
 	}
-	return time.Time{}, domain.ErrChatOrLinkNotFound{}
+	return time.Time{}, domain.ChatOrLinkNotFoundError{}
 }
 
-func (ls *linkStorageInMemory) GetUsersWithLink(ctx context.Context, linkID int) ([]int64, error) {
+func (ls *InMemory) GetUsersWithLink(_ context.Context, linkID int) ([]int64, error) {
 	ls.mu.RLock()
 	defer ls.mu.RUnlock()
 
@@ -148,7 +148,7 @@ func (ls *linkStorageInMemory) GetUsersWithLink(ctx context.Context, linkID int)
 	return result, nil
 }
 
-func (ls *linkStorageInMemory) SetLastUpdated(ctx context.Context, linkID int, lastUpdated time.Time) error {
+func (ls *InMemory) SetLastUpdated(_ context.Context, linkID int, lastUpdated time.Time) error {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -164,9 +164,9 @@ func (ls *linkStorageInMemory) SetLastUpdated(ctx context.Context, linkID int, l
 	}
 
 	if !found {
-		return domain.ErrChatOrLinkNotFound{}
+		return domain.ChatOrLinkNotFoundError{}
 	}
 	return nil
 }
 
-func (ls *linkStorageInMemory) Close() {}
+func (ls *InMemory) Close() {}

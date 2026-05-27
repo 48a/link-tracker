@@ -42,14 +42,14 @@ func main() {
 		logger.Error("create producer", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	defer producer.Close()
+	defer func() { _ = producer.Close() }()
 
 	consumerGroup, err := sarama.NewConsumerGroup(cfg.KafkaBroker, cfg.KafkaConsumerGroup, saramaCfg)
 	if err != nil {
 		logger.Error("create consumer group", slog.String("error", err.Error()))
-		os.Exit(1)
+		return
 	}
-	defer consumerGroup.Close()
+	defer func() { _ = consumerGroup.Close() }()
 
 	worker := agentkafka.NewWorker(processor, producer, cfg.OutputTopic, logger)
 
@@ -61,7 +61,7 @@ func main() {
 
 	go func() {
 		for {
-			if err := consumerGroup.Consume(ctx, []string{cfg.InputTopic}, worker); err != nil {
+			if err = consumerGroup.Consume(ctx, []string{cfg.InputTopic}, worker); err != nil {
 				logger.Error("consume", slog.String("error", err.Error()))
 				return
 			}

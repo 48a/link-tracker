@@ -2,6 +2,7 @@ package agentkafka
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	"github.com/IBM/sarama"
@@ -56,9 +57,9 @@ func (w *Worker) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.
 				Value: sarama.ByteEncoder(outBytes),
 			}
 
-			if _, _, err := w.producer.SendMessage(outMsg); err != nil {
+			if _, _, err = w.producer.SendMessage(outMsg); err != nil {
 				w.logger.Error("send processed message", slog.String("error", err.Error()))
-				return err
+				return fmt.Errorf("send message: %w", err)
 			}
 			w.logger.Info("processed and forwarded update", slog.Int64("id", processed.ID))
 		} else {

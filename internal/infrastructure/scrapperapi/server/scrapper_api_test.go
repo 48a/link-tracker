@@ -22,7 +22,7 @@ type mockScrapperService struct {
 
 func (m *mockScrapperService) RegisterChat(chatID int64) error {
 	if m.chats[chatID] {
-		return domain.ErrChatAlreadyExist{}
+		return domain.ChatAlreadyExistError{}
 	}
 	m.chats[chatID] = true
 	return nil
@@ -30,7 +30,7 @@ func (m *mockScrapperService) RegisterChat(chatID int64) error {
 
 func (m *mockScrapperService) DeleteChat(chatID int64) error {
 	if !m.chats[chatID] {
-		return domain.ErrChatNotExist{}
+		return domain.ChatNotExistError{}
 	}
 	delete(m.chats, chatID)
 	delete(m.links, chatID)
@@ -39,18 +39,18 @@ func (m *mockScrapperService) DeleteChat(chatID int64) error {
 
 func (m *mockScrapperService) GetLinks(chatID int64) ([]domain.Link, error) {
 	if !m.chats[chatID] {
-		return nil, domain.ErrChatNotExist{}
+		return nil, domain.ChatNotExistError{}
 	}
 	return m.links[chatID], nil
 }
 
 func (m *mockScrapperService) AddLink(chatID int64, addLinkRequest scrapper.AddLinkInput) (domain.Link, error) {
 	if !m.chats[chatID] {
-		return domain.Link{}, domain.ErrChatNotExist{}
+		return domain.Link{}, domain.ChatNotExistError{}
 	}
 	for _, l := range m.links[chatID] {
 		if l.URL == addLinkRequest.URL {
-			return l, domain.ErrAlreadyTracking{}
+			return l, domain.AlreadyTrackingError{}
 		}
 	}
 	link := domain.Link{ID: chatID, URL: addLinkRequest.URL, Tags: addLinkRequest.Tags}
@@ -60,7 +60,7 @@ func (m *mockScrapperService) AddLink(chatID int64, addLinkRequest scrapper.AddL
 
 func (m *mockScrapperService) DeleteLink(chatID int64, deleteLinkRequest scrapper.DeleteLinkInput) (domain.Link, error) {
 	if !m.chats[chatID] {
-		return domain.Link{}, domain.ErrChatOrLinkNotFound{}
+		return domain.Link{}, domain.ChatOrLinkNotFoundError{}
 	}
 	links := m.links[chatID]
 	for i, l := range links {
@@ -69,10 +69,10 @@ func (m *mockScrapperService) DeleteLink(chatID int64, deleteLinkRequest scrappe
 			return l, nil
 		}
 	}
-	return domain.Link{}, domain.ErrChatOrLinkNotFound{}
+	return domain.Link{}, domain.ChatOrLinkNotFoundError{}
 }
 
-func setupTestMux() (*http.ServeMux, *mockScrapperService) {
+func setupTestMux() *http.ServeMux {
 	svc := &mockScrapperService{
 		chats: make(map[int64]bool),
 		links: make(map[int64][]domain.Link),
@@ -86,13 +86,13 @@ func setupTestMux() (*http.ServeMux, *mockScrapperService) {
 	mux.HandleFunc("POST /links", handler.AddLink)
 	mux.HandleFunc("DELETE /links", handler.DeleteLink)
 
-	return mux, svc
+	return mux
 }
 
 func TestScrapperAPI_AddAndGetLink(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupTestMux()
+	mux := setupTestMux()
 
 	req := httptest.NewRequest("POST", "/tg-chat/1", nil)
 	w := httptest.NewRecorder()
@@ -141,7 +141,7 @@ func TestScrapperAPI_AddAndGetLink(t *testing.T) {
 func TestScrapperAPI_AddAndDeleteLink(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupTestMux()
+	mux := setupTestMux()
 
 	req := httptest.NewRequest("POST", "/tg-chat/1", nil)
 	w := httptest.NewRecorder()
@@ -181,7 +181,7 @@ func TestScrapperAPI_AddAndDeleteLink(t *testing.T) {
 func TestScrapperAPI_DeleteLinkFromNonExistentChat(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupTestMux()
+	mux := setupTestMux()
 
 	req := httptest.NewRequest("POST", "/tg-chat/1", nil)
 	w := httptest.NewRecorder()
@@ -221,7 +221,7 @@ func TestScrapperAPI_DeleteLinkFromNonExistentChat(t *testing.T) {
 func TestScrapperAPI_AddLinkToNonExistentChat(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupTestMux()
+	mux := setupTestMux()
 
 	addReq := scrapperapi.AddLinkRequest{URL: "https://github.com/user/repo"}
 	body, _ := json.Marshal(addReq)
@@ -238,7 +238,7 @@ func TestScrapperAPI_AddLinkToNonExistentChat(t *testing.T) {
 func TestScrapperAPI_InteractWithDeletedChat(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupTestMux()
+	mux := setupTestMux()
 
 	req := httptest.NewRequest("POST", "/tg-chat/1", nil)
 	w := httptest.NewRecorder()
@@ -267,7 +267,7 @@ func TestScrapperAPI_InteractWithDeletedChat(t *testing.T) {
 func TestScrapperAPI_DeleteNonExistentChat(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupTestMux()
+	mux := setupTestMux()
 
 	req := httptest.NewRequest("DELETE", "/tg-chat/1", nil)
 	w := httptest.NewRecorder()

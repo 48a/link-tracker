@@ -11,7 +11,7 @@ import (
 )
 
 func TestClient_Timeout(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -35,9 +35,9 @@ func TestClient_Timeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	var doErr ErrCantDoRequest
-	if !errors.As(err, &doErr) || !errors.Is(doErr.Unwrap(), ErrTimedOut{}) {
-		t.Fatalf("expected ErrTimedOut, got: %v", err)
+	var doErr DoRequestError
+	if !errors.As(err, &doErr) || !errors.Is(doErr.Unwrap(), TimedoutError{}) {
+		t.Fatalf("expected TimedoutError, got: %v", err)
 	}
 	if elapsed >= 100*time.Millisecond {
 		t.Fatalf("timeout did not work correctly, elapsed: %v", elapsed)
@@ -46,7 +46,7 @@ func TestClient_Timeout(t *testing.T) {
 
 func TestClient_Retry5xx(t *testing.T) {
 	var attempts int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&attempts, 1)
 		if atomic.LoadInt32(&attempts) <= 2 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -78,7 +78,7 @@ func TestClient_Retry5xx(t *testing.T) {
 
 func TestClient_NoRetry4xx(t *testing.T) {
 	var attempts int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&attempts, 1)
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"description":"bad","code":"400"}`))
@@ -107,7 +107,7 @@ func TestClient_NoRetry4xx(t *testing.T) {
 
 func TestClient_ConstantBackoff(t *testing.T) {
 	var attempts int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&attempts, 1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -140,7 +140,7 @@ func TestClient_ConstantBackoff(t *testing.T) {
 
 func TestClient_CircuitBreakerOpen(t *testing.T) {
 	var attempts int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&attempts, 1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -161,7 +161,7 @@ func TestClient_CircuitBreakerOpen(t *testing.T) {
 	_ = c.RegisterChat(context.Background(), 1)
 
 	err := c.RegisterChat(context.Background(), 1)
-	var apiErr ApiError
+	var apiErr APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected ApiError, got %v", err)
 	}
@@ -176,7 +176,7 @@ func TestClient_CircuitBreakerOpen(t *testing.T) {
 
 func TestClient_CircuitBreakerHalfOpenToClosed(t *testing.T) {
 	var attempts int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits := atomic.AddInt32(&attempts, 1)
 		if hits <= 2 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -220,7 +220,7 @@ func TestClient_CircuitBreakerHalfOpenToClosed(t *testing.T) {
 
 func TestClient_CircuitBreakerHalfOpenToOpen(t *testing.T) {
 	var attempts int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits := atomic.AddInt32(&attempts, 1)
 		if hits == 3 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -249,7 +249,7 @@ func TestClient_CircuitBreakerHalfOpenToOpen(t *testing.T) {
 	_ = c.RegisterChat(context.Background(), 1)
 
 	err := c.RegisterChat(context.Background(), 1)
-	var apiErr ApiError
+	var apiErr APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("expected fallback 503 error, got %v", err)
 	}

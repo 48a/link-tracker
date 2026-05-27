@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,28 +18,27 @@ func (m *mockBotService) SendUpdate(update bot.SendUpdateInput) {
 	m.lastUpdate = update
 }
 
-func setupBotTestMux() (*http.ServeMux, *mockBotService) {
+func setupBotTestMux() *http.ServeMux {
 	svc := &mockBotService{}
 	handler := server.NewHandler(svc)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /updates", handler.SendUpdate)
 
-	return mux, svc
+	return mux
 }
 
 func TestBotAPI_ValidUpdate(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupBotTestMux()
+	mux := setupBotTestMux()
 
-	updateReq := bot.SendUpdateInput{
-		ID:          1,
-		URL:         "https://github.com/user/repo",
-		Description: "New update text",
-		TgChatIDs:   []int64{111, 222},
-	}
-	body, _ := json.Marshal(updateReq)
+	body := []byte(`{
+		"ID": 1,
+		"URL": "https://github.com/user/repo",
+		"Description": "New update text",
+		"TgChatIDs": [111,222]
+	}`)
 
 	req := httptest.NewRequest("POST", "/updates", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -55,7 +53,7 @@ func TestBotAPI_ValidUpdate(t *testing.T) {
 func TestBotAPI_InvalidUpdate(t *testing.T) {
 	t.Parallel()
 
-	mux, _ := setupBotTestMux()
+	mux := setupBotTestMux()
 
 	invalidJSON := []byte(`{
 		"id": "not-an-integer",

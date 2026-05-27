@@ -17,7 +17,11 @@ import (
 	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/api/scrapperapi"
 )
 
-type client struct {
+const (
+	tgChatHeaderKey = "Tg-Chat-Id"
+)
+
+type Client struct {
 	baseURL string
 	cl      *http.Client
 	timeout time.Duration
@@ -35,7 +39,7 @@ type headerField struct {
 	value string
 }
 
-func NewClient(cfg Config) client {
+func NewClient(cfg Config) Client {
 	cbSettings := gobreaker.Settings{
 		Name:        "scrapper-client",
 		MaxRequests: cfg.CBMinRequests,
@@ -47,7 +51,7 @@ func NewClient(cfg Config) client {
 		},
 	}
 
-	return client{
+	return Client{
 		baseURL: cfg.BaseURL,
 		cl:      http.DefaultClient,
 		timeout: cfg.Timeout,
@@ -56,21 +60,169 @@ func NewClient(cfg Config) client {
 	}
 }
 
-func (_ client) verifyResponse(linkResponse scrapperapi.LinkResponse, link string, skipTags bool, tags []string, operation string) error {
-	if linkResponse.URL != link {
-		return ErrLinkMismatch{operation: operation}
-	}
-	if !skipTags && slices.Compare(linkResponse.Tags, tags) != 0 {
-		return ErrTagsMismatch{operation: operation}
-	}
-	return nil
-}
-
 func isRetryable(statusCode int) bool {
 	return statusCode >= 500 && statusCode <= 599
 }
 
-func (c client) restApiRequest(ctx context.Context, operation, method, url string, headerFields []headerField, requestBody []byte) (responseData, error) {
+func (c Client) RegisterChat(ctx context.Context, id int64) error {
+	return c.doChatRequest(ctx, id, fmt.Sprintf("register chat %v", id), http.MethodPost, http.StatusConflict)
+}
+
+func (c Client) DeleteChat(ctx context.Context, id int64) error {
+	return c.doChatRequest(ctx, id, fmt.Sprintf("delete chat %v", id), http.MethodDelete, http.StatusNotFound)
+}
+
+func (c Client) GetLinks(ctx context.Context, id int64) (scrapperapi.ListLinksResponse, error) {
+	operation := fmt.Sprintf("get links %v", id)
+	resp, err := c.restAPIRequest(
+		ctx,
+		operation,
+		"GET",
+		c.baseURL+"/links",
+		[]headerField{
+			{key: tgChatHeaderKey, value: strconv.FormatInt(id, 10)},
+		},
+		nil,
+	)
+	if err != nil {
+		return scrapperapi.ListLinksResponse{}, err
+	}
+
+	if resp.statusCode == http.StatusOK {
+		var result scrapperapi.ListLinksResponse
+		err = json.Unmarshal(resp.body, &result)
+		if err != nil {
+			return scrapperapi.ListLinksResponse{}, UnmarshalResponseError{operation: operation, wrapped: err}
+		}
+		return result, nil
+	}
+
+	var responseError scrapperapi.APIErrorResponse
+	err = json.Unmarshal(resp.body, &responseError)
+	if err != nil {
+		return scrapperapi.ListLinksResponse{}, UnmarshalResponseError{operation: operation, wrapped: err}
+	}
+
+	switch resp.statusCode {
+	case http.StatusBadRequest:
+		return scrapperapi.ListLinksResponse{}, NewAPIError(http.StatusBadRequest, responseError, operation)
+	case http.StatusNotFound:
+		return scrapperapi.ListLinksResponse{}, NewAPIError(http.StatusNotFound, responseError, operation)
+	case http.StatusServiceUnavailable:
+		return scrapperapi.ListLinksResponse{}, NewAPIError(http.StatusServiceUnavailable, responseError, operation)
+	}
+	return scrapperapi.ListLinksResponse{}, UnknownStatusCodeError{operation: operation}
+}
+
+func (c Client) AddLink(ctx context.Context, id int64, addRequest scrapperapi.AddLinkRequest) error {
+	operation := fmt.Sprintf("add link %#v to %v", addRequest, id)
+
+	body, err := json.Marshal(addRequest)
+	if err != nil {
+		return MarshalRequestError{operation: operation, wrapped: err}
+	}
+
+	resp, err := c.restAPIRequest(
+		ctx,
+		operation,
+		"POST",
+		c.baseURL+"/links",
+		[]headerField{
+			{key: tgChatHeaderKey, value: strconv.FormatInt(id, 10)},
+		},
+		body,
+	)
+	if err != nil {
+		return err
+	}
+
+	if resp.statusCode == http.StatusOK {
+		var linkResponse scrapperapi.LinkResponse
+		err = json.Unmarshal(resp.body, &linkResponse)
+		if err != nil {
+			return UnmarshalResponseError{operation: operation, wrapped: err}
+		}
+		return c.verifyResponse(linkResponse, addRequest.URL, false, addRequest.Tags, operation)
+	}
+
+	var responseError scrapperapi.APIErrorResponse
+	err = json.Unmarshal(resp.body, &responseError)
+	if err != nil {
+		return UnmarshalResponseError{operation: operation, wrapped: err}
+	}
+
+	switch resp.statusCode {
+	case http.StatusBadRequest:
+		return NewAPIError(http.StatusBadRequest, responseError, operation)
+	case http.StatusNotFound:
+		return NewAPIError(http.StatusNotFound, responseError, operation)
+	case http.StatusConflict:
+		return NewAPIError(http.StatusConflict, responseError, operation)
+	case http.StatusServiceUnavailable:
+		return NewAPIError(http.StatusServiceUnavailable, responseError, operation)
+	}
+	return UnknownStatusCodeError{operation: operation}
+}
+
+func (c Client) DeleteLink(ctx context.Context, id int64, deleteRequest scrapperapi.DeleteLinkRequest) error {
+	operation := fmt.Sprintf("delete link %#v to %v", deleteRequest, id)
+
+	body, err := json.Marshal(deleteRequest)
+	if err != nil {
+		return MarshalRequestError{operation: operation, wrapped: err}
+	}
+
+	resp, err := c.restAPIRequest(
+		ctx,
+		operation,
+		"DELETE",
+		c.baseURL+"/links",
+		[]headerField{
+			{key: tgChatHeaderKey, value: strconv.FormatInt(id, 10)},
+		},
+		body,
+	)
+	if err != nil {
+		return err
+	}
+
+	if resp.statusCode == http.StatusOK {
+		var linkResponse scrapperapi.LinkResponse
+		err = json.Unmarshal(resp.body, &linkResponse)
+		if err != nil {
+			return UnmarshalResponseError{operation: operation, wrapped: err}
+		}
+		return c.verifyResponse(linkResponse, deleteRequest.URL, true, []string{}, operation)
+	}
+
+	var responseError scrapperapi.APIErrorResponse
+	err = json.Unmarshal(resp.body, &responseError)
+	if err != nil {
+		return UnmarshalResponseError{operation: operation, wrapped: err}
+	}
+
+	switch resp.statusCode {
+	case http.StatusBadRequest:
+		return NewAPIError(http.StatusBadRequest, responseError, operation)
+	case http.StatusNotFound:
+		return NewAPIError(http.StatusNotFound, responseError, operation)
+	case http.StatusServiceUnavailable:
+		return NewAPIError(http.StatusServiceUnavailable, responseError, operation)
+	}
+	return UnknownStatusCodeError{operation: operation}
+}
+
+func (Client) verifyResponse(linkResponse scrapperapi.LinkResponse, link string, skipTags bool, tags []string, operation string) error {
+	if linkResponse.URL != link {
+		return LinkMismatchError{operation: operation}
+	}
+	if !skipTags && slices.Compare(linkResponse.Tags, tags) != 0 {
+		return TagsMismatchError{operation: operation}
+	}
+	return nil
+}
+
+func (c Client) restAPIRequest(ctx context.Context, operation, method, url string, headerFields []headerField, requestBody []byte) (responseData, error) {
 	resp, cbErr := c.cb.Execute(func() (responseData, error) {
 		var lastResp responseData
 
@@ -86,7 +238,7 @@ func (c client) restApiRequest(ctx context.Context, operation, method, url strin
 
 				req, err := http.NewRequestWithContext(reqCtx, method, url, bodyReader)
 				if err != nil {
-					return retry.Unrecoverable(ErrCantCreateRequest{operation: operation, wrapped: err})
+					return retry.Unrecoverable(CreateRequestError{operation: operation, wrapped: err})
 				}
 
 				for _, field := range headerFields {
@@ -96,15 +248,15 @@ func (c client) restApiRequest(ctx context.Context, operation, method, url strin
 				res, err := c.cl.Do(req)
 				if err != nil {
 					if errors.Is(err, context.DeadlineExceeded) {
-						return ErrCantDoRequest{operation: operation, wrapped: ErrTimedOut{}}
+						return DoRequestError{operation: operation, wrapped: TimedoutError{}}
 					}
-					return err
+					return fmt.Errorf("do request: %w", err)
 				}
-				defer res.Body.Close()
+				defer func() { _ = res.Body.Close() }()
 
 				b, err := io.ReadAll(res.Body)
 				if err != nil {
-					return retry.Unrecoverable(ErrCantReadResponse{operation: operation, wrapped: err})
+					return retry.Unrecoverable(ReadResponseError{operation: operation, wrapped: err})
 				}
 
 				lastResp = responseData{body: b, statusCode: res.StatusCode}
@@ -121,32 +273,34 @@ func (c client) restApiRequest(ctx context.Context, operation, method, url strin
 			retry.DelayType(retry.FixedDelay),
 		)
 
-		return lastResp, err
+		if err != nil {
+			return lastResp, fmt.Errorf("retry do: %w", err)
+		}
+		return lastResp, nil
 	})
 
 	if cbErr != nil {
 		if errors.Is(cbErr, gobreaker.ErrOpenState) || errors.Is(cbErr, gobreaker.ErrTooManyRequests) {
 			return c.fallbackResponse()
 		}
-		return responseData{}, cbErr
+		return responseData{}, fmt.Errorf("circuit breaker: %w", cbErr)
 	}
 
 	return resp, nil
 }
 
-func (c client) fallbackResponse() (responseData, error) {
+func (c Client) fallbackResponse() (responseData, error) {
 	return responseData{
-		body:       []byte(`{"description":"service temporarily unavailable (Circuit Breaker OPEN)","code":"503"}`),
+		body:       []byte(`{"description":"service temporarily unavailable (Circuit Breaker OPEN)","code":"http.StatusServiceUnavailable"}`),
 		statusCode: http.StatusServiceUnavailable,
 	}, nil
 }
 
-func (c client) RegisterChat(ctx context.Context, id int64) error {
-	operation := fmt.Sprintf("register chat %v", id)
-	resp, err := c.restApiRequest(
+func (c Client) doChatRequest(ctx context.Context, id int64, operation, method string, targetErrorStatus int) error {
+	resp, err := c.restAPIRequest(
 		ctx,
 		operation,
-		"POST",
+		method,
 		c.baseURL+"/tg-chat/"+strconv.FormatInt(id, 10),
 		[]headerField{},
 		nil,
@@ -155,198 +309,23 @@ func (c client) RegisterChat(ctx context.Context, id int64) error {
 		return err
 	}
 
-	if resp.statusCode == 200 {
+	if resp.statusCode == http.StatusOK {
 		return nil
 	}
 
-	var responseError scrapperapi.ApiErrorResponse
+	var responseError scrapperapi.APIErrorResponse
 	err = json.Unmarshal(resp.body, &responseError)
 	if err != nil {
-		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
+		return UnmarshalResponseError{operation: operation, wrapped: err}
 	}
 
 	switch resp.statusCode {
-	case 400:
-		return NewApiError(400, responseError, operation)
-	case 409:
-		return NewApiError(409, responseError, operation)
-	case 503:
-		return NewApiError(503, responseError, operation)
+	case http.StatusBadRequest:
+		return NewAPIError(http.StatusBadRequest, responseError, operation)
+	case http.StatusServiceUnavailable:
+		return NewAPIError(http.StatusServiceUnavailable, responseError, operation)
+	case targetErrorStatus:
+		return NewAPIError(targetErrorStatus, responseError, operation)
 	}
-	return ErrUnknownStatusCode{operation: operation}
-}
-
-func (c client) DeleteChat(ctx context.Context, id int64) error {
-	operation := fmt.Sprintf("delete chat %v", id)
-	resp, err := c.restApiRequest(
-		ctx,
-		operation,
-		"DELETE",
-		c.baseURL+"/tg-chat/"+strconv.FormatInt(id, 10),
-		[]headerField{},
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-
-	if resp.statusCode == 200 {
-		return nil
-	}
-
-	var responseError scrapperapi.ApiErrorResponse
-	err = json.Unmarshal(resp.body, &responseError)
-	if err != nil {
-		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-	}
-
-	switch resp.statusCode {
-	case 400:
-		return NewApiError(400, responseError, operation)
-	case 404:
-		return NewApiError(404, responseError, operation)
-	case 503:
-		return NewApiError(503, responseError, operation)
-	}
-	return ErrUnknownStatusCode{operation: operation}
-}
-
-func (c client) GetLinks(ctx context.Context, id int64) (scrapperapi.ListLinksResponse, error) {
-	operation := fmt.Sprintf("get links %v", id)
-	resp, err := c.restApiRequest(
-		ctx,
-		operation,
-		"GET",
-		c.baseURL+"/links",
-		[]headerField{
-			{key: "Tg-Chat-Id", value: strconv.FormatInt(id, 10)},
-		},
-		nil,
-	)
-	if err != nil {
-		return scrapperapi.ListLinksResponse{}, err
-	}
-
-	if resp.statusCode == 200 {
-		var result scrapperapi.ListLinksResponse
-		err = json.Unmarshal(resp.body, &result)
-		if err != nil {
-			return scrapperapi.ListLinksResponse{}, ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-		}
-		return result, nil
-	}
-
-	var responseError scrapperapi.ApiErrorResponse
-	err = json.Unmarshal(resp.body, &responseError)
-	if err != nil {
-		return scrapperapi.ListLinksResponse{}, ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-	}
-
-	switch resp.statusCode {
-	case 400:
-		return scrapperapi.ListLinksResponse{}, NewApiError(400, responseError, operation)
-	case 404:
-		return scrapperapi.ListLinksResponse{}, NewApiError(404, responseError, operation)
-	case 503:
-		return scrapperapi.ListLinksResponse{}, NewApiError(503, responseError, operation)
-	}
-	return scrapperapi.ListLinksResponse{}, ErrUnknownStatusCode{operation: operation}
-}
-
-func (c client) AddLink(ctx context.Context, id int64, addRequest scrapperapi.AddLinkRequest) error {
-	operation := fmt.Sprintf("add link %#v to %v", addRequest, id)
-
-	body, err := json.Marshal(addRequest)
-	if err != nil {
-		return ErrCantMarshalRequest{operation: operation, wrapped: err}
-	}
-
-	resp, err := c.restApiRequest(
-		ctx,
-		operation,
-		"POST",
-		c.baseURL+"/links",
-		[]headerField{
-			{key: "Tg-Chat-Id", value: strconv.FormatInt(id, 10)},
-		},
-		body,
-	)
-	if err != nil {
-		return err
-	}
-
-	if resp.statusCode == 200 {
-		var linkResponse scrapperapi.LinkResponse
-		err = json.Unmarshal(resp.body, &linkResponse)
-		if err != nil {
-			return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-		}
-		return c.verifyResponse(linkResponse, addRequest.URL, false, addRequest.Tags, operation)
-	}
-
-	var responseError scrapperapi.ApiErrorResponse
-	err = json.Unmarshal(resp.body, &responseError)
-	if err != nil {
-		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-	}
-
-	switch resp.statusCode {
-	case 400:
-		return NewApiError(400, responseError, operation)
-	case 404:
-		return NewApiError(404, responseError, operation)
-	case 409:
-		return NewApiError(409, responseError, operation)
-	case 503:
-		return NewApiError(503, responseError, operation)
-	}
-	return ErrUnknownStatusCode{operation: operation}
-}
-
-func (c client) DeleteLink(ctx context.Context, id int64, deleteRequest scrapperapi.DeleteLinkRequest) error {
-	operation := fmt.Sprintf("delete link %#v to %v", deleteRequest, id)
-
-	body, err := json.Marshal(deleteRequest)
-	if err != nil {
-		return ErrCantMarshalRequest{operation: operation, wrapped: err}
-	}
-
-	resp, err := c.restApiRequest(
-		ctx,
-		operation,
-		"DELETE",
-		c.baseURL+"/links",
-		[]headerField{
-			{key: "Tg-Chat-Id", value: strconv.FormatInt(id, 10)},
-		},
-		body,
-	)
-	if err != nil {
-		return err
-	}
-
-	if resp.statusCode == 200 {
-		var linkResponse scrapperapi.LinkResponse
-		err = json.Unmarshal(resp.body, &linkResponse)
-		if err != nil {
-			return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-		}
-		return c.verifyResponse(linkResponse, deleteRequest.URL, true, []string{}, operation)
-	}
-
-	var responseError scrapperapi.ApiErrorResponse
-	err = json.Unmarshal(resp.body, &responseError)
-	if err != nil {
-		return ErrCantUnmarshalResponse{operation: operation, wrapped: err}
-	}
-
-	switch resp.statusCode {
-	case 400:
-		return NewApiError(400, responseError, operation)
-	case 404:
-		return NewApiError(404, responseError, operation)
-	case 503:
-		return NewApiError(503, responseError, operation)
-	}
-	return ErrUnknownStatusCode{operation: operation}
+	return UnknownStatusCodeError{operation: operation}
 }

@@ -32,6 +32,7 @@ type tgSendMessageReq struct {
 	Text   string `json:"text"`
 }
 
+//nolint:gocognit
 func TestE2EFlow(t *testing.T) {
 	ctx := context.Background()
 
@@ -257,6 +258,7 @@ func TestE2EFlow(t *testing.T) {
 	})
 }
 
+//nolint:gocognit
 func TestScrapperKafkaBotFlow(t *testing.T) {
 	ctx := context.Background()
 
@@ -536,6 +538,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	})
 }
 
+//nolint:gocognit
 func TestAgentKafkaIntegration(t *testing.T) {
 	ctx := context.Background()
 
@@ -588,7 +591,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 
 	go func() {
 		for {
-			if err := consumerGroup.Consume(agentCtx, []string{"link.raw-updates"}, worker); err != nil {
+			if err = consumerGroup.Consume(agentCtx, []string{"link.raw-updates"}, worker); err != nil {
 				return
 			}
 			if agentCtx.Err() != nil {
@@ -613,7 +616,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 
 	t.Run("receive valid message", func(t *testing.T) {
 		validMsg := `{"id": 12345, "description": "This is a perfectly valid long update.", "author": "good_author", "tgChatIds": [111, 222]}`
-		_, _, err := producer.SendMessage(&sarama.ProducerMessage{
+		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
 			Topic: "link.raw-updates",
 			Value: sarama.StringEncoder(validMsg),
 		})
@@ -624,7 +627,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 		select {
 		case msg := <-partConsumer.Messages():
 			var processed domain.ProcessedUpdate
-			if err := json.Unmarshal(msg.Value, &processed); err != nil {
+			if err = json.Unmarshal(msg.Value, &processed); err != nil {
 				t.Fatalf("failed to unmarshal output message: %v", err)
 			}
 			if processed.ID != 12345 || processed.Priority != "HIGH" {
@@ -637,7 +640,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 
 	t.Run("invalid format does not crash agent", func(t *testing.T) {
 		invalidMsg := `{"id": "this-should-be-int", "broken_json": `
-		_, _, err := producer.SendMessage(&sarama.ProducerMessage{
+		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
 			Topic: "link.raw-updates",
 			Value: sarama.StringEncoder(invalidMsg),
 		})
@@ -659,7 +662,7 @@ func TestAgentKafkaIntegration(t *testing.T) {
 		select {
 		case msg := <-partConsumer.Messages():
 			var processed domain.ProcessedUpdate
-			if err := json.Unmarshal(msg.Value, &processed); err != nil {
+			if err = json.Unmarshal(msg.Value, &processed); err != nil {
 				t.Fatalf("failed to unmarshal output message: %v", err)
 			}
 			if processed.ID != 999 {

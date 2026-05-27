@@ -2,15 +2,21 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
 
-type server struct {
+const (
+	readTimeout  = time.Duration(10) * time.Second
+	writeTimeout = time.Duration(30) * time.Second
+)
+
+type Server struct {
 	srv *http.Server
 }
 
-func NewServer(baseURL string, h *handler) server {
+func NewServer(baseURL string, h *Handler) Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tg-chat/{id}", h.RegisterChat)
 	mux.HandleFunc("DELETE /tg-chat/{id}", h.DeleteChat)
@@ -18,19 +24,19 @@ func NewServer(baseURL string, h *handler) server {
 	mux.HandleFunc("POST /links", h.AddLink)
 	mux.HandleFunc("DELETE /links", h.DeleteLink)
 
-	return server{srv: &http.Server{
+	return Server{srv: &http.Server{
 		Addr:         baseURL,
 		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
 		IdleTimeout:  time.Minute,
 	}}
 }
 
-func (s server) Run() error {
-	return s.srv.ListenAndServe()
+func (s Server) Run() error {
+	return fmt.Errorf("listen and serve: %w", s.srv.ListenAndServe())
 }
 
-func (s server) Stop(ctx context.Context) error {
-	return s.srv.Shutdown(ctx)
+func (s Server) Stop(ctx context.Context) error {
+	return fmt.Errorf("shutdown server: %w", s.srv.Shutdown(ctx))
 }
