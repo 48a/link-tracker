@@ -23,7 +23,7 @@ func TestStorages(t *testing.T) {
 	ctx := context.Background()
 
 	req := testcontainers.ContainerRequest{
-		Image:        "postgres:15-alpine",
+		Image:        "library/postgres:15-alpine",
 		Env:          map[string]string{"POSTGRES_USER": "testuser", "POSTGRES_PASSWORD": "testpassword", "POSTGRES_DB": "testdb"},
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor:   wait.ForLog("database system is ready to accept connections").WithOccurrence(2),

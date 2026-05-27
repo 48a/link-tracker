@@ -99,7 +99,7 @@ func TestE2EFlow(t *testing.T) {
 	defer netw.Remove(ctx)
 
 	scrapperDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
+		Image:        "library/postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -120,7 +120,7 @@ func TestE2EFlow(t *testing.T) {
 	defer scrapperDB.Terminate(ctx)
 
 	botDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
+		Image:        "library/postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -147,6 +147,7 @@ func TestE2EFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"scrapper"}},
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
 		Env: map[string]string{
 			"DB_SCRAPPER_HOST":       "postgres",
 			"DB_SCRAPPER_PORT":       "5432",
@@ -178,6 +179,7 @@ func TestE2EFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"bot"}},
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
 		Env: map[string]string{
 			"DB_BOT_HOST":            "postgres-1",
 			"DB_BOT_PORT":            "5432",
@@ -386,7 +388,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	*/
 
 	scrapperDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
+		Image:        "library/postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -407,7 +409,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	defer scrapperDB.Terminate(ctx)
 
 	botDBReq := testcontainers.ContainerRequest{
-		Image:        "postgres:17",
+		Image:        "library/postgres:17",
 		ExposedPorts: []string{"5432/tcp"},
 		Env: map[string]string{
 			"POSTGRES_USER":     "user",
@@ -434,6 +436,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"scrapper"}},
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
 		Env: map[string]string{
 			"DB_SCRAPPER_HOST":       "postgres",
 			"DB_SCRAPPER_PORT":       "5432",
@@ -471,6 +474,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"bot"}},
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
 		Env: map[string]string{
 			"DB_BOT_HOST":            "postgres-1",
 			"DB_BOT_PORT":            "5432",
