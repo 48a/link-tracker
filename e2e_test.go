@@ -39,7 +39,7 @@ func TestE2EFlow(t *testing.T) {
 	tgUpdates := make(chan string, 10)
 	tgReplies := make(chan tgSendMessageReq, 10)
 
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/botTEST_TOKEN/getMe" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{
@@ -87,10 +87,18 @@ func TestE2EFlow(t *testing.T) {
 		t.Logf("Mock server received unexpected request: %s %s", r.Method, r.URL.Path)
 	}))
 
+	l, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("failed to listen on 0.0.0.0: %v", err)
+	}
+	mockServer.Listener.Close()
+	mockServer.Listener = l
+	mockServer.Start()
 	defer mockServer.Close()
 
 	mockServerPort := mockServer.Listener.Addr().(*net.TCPAddr).Port
-	internalMockURL := fmt.Sprintf("http://host.docker.internal:%d", mockServerPort)
+	hostIP := getTestHostIP()
+	internalMockURL := fmt.Sprintf("http://%s:%d", hostIP, mockServerPort)
 
 	netw, err := network.New(ctx)
 	if err != nil {
@@ -269,7 +277,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 
 	var githubUpdatesTriggered atomic.Bool
 
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mockServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/botTEST_TOKEN/getMe" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"ok": true, "result": {"id": 123, "is_bot": true, "first_name": "Test", "username": "Test"}}`))
@@ -316,10 +324,19 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 			return
 		}
 	}))
+
+	l, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("failed to listen on 0.0.0.0: %v", err)
+	}
+	mockServer.Listener.Close()
+	mockServer.Listener = l
+	mockServer.Start()
 	defer mockServer.Close()
 
 	mockServerPort := mockServer.Listener.Addr().(*net.TCPAddr).Port
-	internalMockURL := fmt.Sprintf("http://host.docker.internal:%d", mockServerPort)
+	hostIP := getTestHostIP()
+	internalMockURL := fmt.Sprintf("http://%s:%d", hostIP, mockServerPort)
 
 	netw, err := network.New(ctx)
 	if err != nil {
@@ -676,4 +693,23 @@ func TestAgentKafkaIntegration(t *testing.T) {
 			t.Fatal("timeout waiting for recovery message")
 		}
 	})
+}
+
+func getTestHostIP() string {
+	dockerHost := os.Getenv("DOCKER_HOST")
+	if strings.HasPrefix(dockerHost, "tcp://") {
+		host := strings.TrimPrefix(dockerHost, "tcp://")
+		conn, err := net.DialTimeout("tcp", host, 2*time.Second)
+		if err == nil {
+			defer conn.Close()
+			return conn.LocalAddr().(*net.TCPAddr).IP.String()
+		}
+	}
+	addrs, _ := net.InterfaceAddrs()
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP.String()
+		}
+	}
+	return "host.docker.internal"
 }
