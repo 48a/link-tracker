@@ -39,7 +39,11 @@ test:
     TESTCONTAINERS_HOST_OVERRIDE: "docker"
     TESTCONTAINERS_RYUK_DISABLED: "true"
   before_script:
-    - apk add --no-cache docker-cli
+    - wget https://download.docker.com/linux/static/stable/x86_64/docker-24.0.9.tgz
+    - tar xzvf docker-24.0.9.tgz
+    - mv docker/docker /usr/bin/docker
+    - rm -rf docker docker-24.0.9.tgz
+
     - echo "$CI_JOB_TOKEN" | docker login gitlab.education.tbank.ru:443 -u gitlab-ci-token --password-stdin
 
     - docker pull ${GITLAB_DOCKER_PROXY}/postgres:17
