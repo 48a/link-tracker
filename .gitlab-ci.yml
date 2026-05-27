@@ -26,6 +26,20 @@ lint:
 test:
   stage: test
   image: ${GOLANG_IMAGE}
+  tags:
+    - dind
+  services:
+    - name: docker:dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
+    TESTCONTAINERS_HOST_OVERRIDE: "docker"
+  before_script:
+    - apk add --no-cache docker-cli
+    - echo "$CI_JOB_TOKEN" | docker login gitlab.education.tbank.ru:443 -u gitlab-ci-token --password-stdin
   script:
     - apk add --no-cache gcc musl-dev
     - go test -race -coverprofile=coverage.out ./...
@@ -33,24 +47,6 @@ test:
   coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
   rules:
     - when: always
-
-integration_test:
-  image: docker
-  stage: test
-  variables:
-    DOCKER_HOST: tcp://docker:2376
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: 1
-    DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
-  tags:
-    - dind
-  services:
-    - name: docker:dind
-      alias: docker
-  before_script:
-    - echo "$CI_JOB_TOKEN" | docker login gitlab.education.tbank.ru:443 -u gitlab-ci-token --password-stdin
-  script:
-    - docker pull ${GITLAB_DOCKER_PROXY}/alpine:latest
 
 build:
   stage: build
