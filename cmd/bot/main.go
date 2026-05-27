@@ -46,7 +46,7 @@ func main() {
 	api, err := tgapi.NewTgAPI(cfg.Token)
 	if err != nil {
 		logger.Error("create tg api bot", slog.String("error", err.Error()))
-		return
+		os.Exit(1)
 	}
 
 	storage, err := userstorage.NewPgStorage(cfg.toDSN(), storageTimeout)
