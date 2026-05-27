@@ -108,7 +108,7 @@ func TestE2EFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"postgres"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
 	}
 	scrapperDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: scrapperDBReq,
@@ -129,7 +129,7 @@ func TestE2EFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"postgres-1"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
 	}
 	botDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: botDBReq,
@@ -160,7 +160,7 @@ func TestE2EFlow(t *testing.T) {
 		},
 		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
 			return status == http.StatusBadRequest || status == http.StatusOK
-		}),
+		}).WithStartupTimeout(2 * time.Minute),
 	}
 	scrapperContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: scrapperReq,
@@ -189,7 +189,7 @@ func TestE2EFlow(t *testing.T) {
 			"SKIP_COMMANDS":          "TRUE",
 			"TG_API_BASE_URL":        internalMockURL,
 		},
-		WaitingFor: wait.ForLog("start polling"),
+		WaitingFor: wait.ForLog("start polling").WithStartupTimeout(2 * time.Minute),
 	}
 	botContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: botReq,
@@ -326,7 +326,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 	defer netw.Remove(ctx)
 
 	kafkaReq := testcontainers.ContainerRequest{
-		Image:          "docker.io/bitnamilegacy/kafka:4.0.0",
+		Image:          "bitnamilegacy/kafka:4.0.0",
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"kafka"}},
 		ExposedPorts:   []string{"9092/tcp", "9094/tcp"},
@@ -345,7 +345,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 			"KAFKA_CFG_SASL_MECHANISM_INTER_BROKER_PROTOCOL": "PLAIN",
 			"KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE":            "true",
 		},
-		WaitingFor: wait.ForListeningPort("9092/tcp"),
+		WaitingFor: wait.ForListeningPort("9092/tcp").WithStartupTimeout(3 * time.Minute),
 	}
 	kafkaContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: kafkaReq,
@@ -368,7 +368,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		},
 		WaitingFor: wait.ForHTTP("/subjects").WithPort("8081/tcp").WithStatusCodeMatcher(func(status int) bool {
 			return status == http.StatusOK
-		}),
+		}).WithStartupTimeout(2 * time.Minute),
 	}
 	srContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: srReq,
@@ -395,7 +395,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"postgres"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
 	}
 	scrapperDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: scrapperDBReq,
@@ -416,7 +416,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		},
 		Networks:       []string{netw.Name},
 		NetworkAliases: map[string][]string{netw.Name: {"postgres-1"}},
-		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		WaitingFor:     wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(2 * time.Minute),
 	}
 	botDB, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: botDBReq,
@@ -453,7 +453,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 		},
 		WaitingFor: wait.ForHTTP("/links").WithPort("8001/tcp").WithStatusCodeMatcher(func(status int) bool {
 			return status == http.StatusBadRequest || status == http.StatusOK
-		}),
+		}).WithStartupTimeout(2 * time.Minute),
 	}
 	scrapperContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: scrapperReq,
@@ -488,7 +488,7 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 			"TG_API_BASE_URL":        internalMockURL,
 			"SCHEMA_REGISTRY_URL":    "http://schema-registry:8081",
 		},
-		WaitingFor: wait.ForLog("start polling"),
+		WaitingFor: wait.ForLog("start polling").WithStartupTimeout(2 * time.Minute),
 	}
 	botContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: botReq,
