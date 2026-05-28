@@ -52,7 +52,13 @@ test_e2e_flow:
   script:
     - docker pull ${GITLAB_DOCKER_PROXY}/postgres:17
     - docker tag ${GITLAB_DOCKER_PROXY}/postgres:17 postgres:17
-    
+  
+    - echo "Building local/scrapper and local/bot..."
+    - |
+      (docker build -t local/scrapper:latest -f Dockerfile.scrapper .) &
+      (docker build -t local/bot:latest -f Dockerfile.bot .) &
+      wait
+
     - go test -race -run ^TestE2EFlow$ -coverprofile=coverage.out ./...
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
@@ -64,6 +70,12 @@ test_scrapper_kafka_bot:
       (docker pull ${GITLAB_DOCKER_PROXY}/postgres:17 && docker tag ${GITLAB_DOCKER_PROXY}/postgres:17 postgres:17) &
       (docker pull ${GITLAB_DOCKER_PROXY}/bitnamilegacy/kafka:4.0.0 && docker tag ${GITLAB_DOCKER_PROXY}/bitnamilegacy/kafka:4.0.0 bitnamilegacy/kafka:4.0.0) &
       (docker pull ${GITLAB_DOCKER_PROXY}/confluentinc/cp-schema-registry:7.5.0 && docker tag ${GITLAB_DOCKER_PROXY}/confluentinc/cp-schema-registry:7.5.0 confluentinc/cp-schema-registry:7.5.0) &
+      wait
+
+    - echo "Building local/scrapper and local/bot..."
+    - |
+      (docker build -t local/scrapper:latest -f Dockerfile.scrapper .) &
+      (docker build -t local/bot:latest -f Dockerfile.bot .) &
       wait
       
     - go test -race -run ^TestScrapperKafkaBotFlow$ -coverprofile=coverage.out ./...

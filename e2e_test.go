@@ -577,10 +577,7 @@ func startScrapper(ctx context.Context, netName, dbHost, internalMockURL, botCom
 	}
 
 	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    ".",
-			Dockerfile: "Dockerfile.scrapper",
-		},
+		Image:          "local/scrapper:latest",
 		Networks:       []string{netName},
 		NetworkAliases: map[string][]string{netName: {"scrapper"}},
 		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
@@ -618,10 +615,7 @@ func startBot(ctx context.Context, netName, dbHost, internalMockURL, botCommType
 	}
 
 	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    ".",
-			Dockerfile: "Dockerfile.bot",
-		},
+		Image:          "local/bot:latest",
 		Networks:       []string{netName},
 		NetworkAliases: map[string][]string{netName: {"bot"}},
 		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
