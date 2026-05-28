@@ -59,7 +59,7 @@ test_e2e_flow:
       (docker build -t local/bot:latest -f Dockerfile.bot .) &
       wait
 
-    - go test -race -run ^TestE2EFlow$ -coverprofile=coverage.out ./...
+    - go test -run ^TestE2EFlow$ -coverprofile=coverage.out ./...
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
 
@@ -78,7 +78,7 @@ test_scrapper_kafka_bot:
       (docker build -t local/bot:latest -f Dockerfile.bot .) &
       wait
       
-    - go test -race -run ^TestScrapperKafkaBotFlow$ -coverprofile=coverage.out ./...
+    - go test -run ^TestScrapperKafkaBotFlow$ -coverprofile=coverage.out ./...
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
 
@@ -88,7 +88,7 @@ test_agent_kafka:
     - docker pull ${GITLAB_DOCKER_PROXY}/confluentinc/confluent-local:7.5.0
     - docker tag ${GITLAB_DOCKER_PROXY}/confluentinc/confluent-local:7.5.0 confluentinc/confluent-local:7.5.0
     
-    - go test -race -run ^TestAgentKafkaIntegration$ -coverprofile=coverage.out ./...
+    - go test -run ^TestAgentKafkaIntegration$ -coverprofile=coverage.out ./...
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
 
@@ -100,7 +100,7 @@ test_other:
       (docker pull ${GITLAB_DOCKER_PROXY}/valkey/valkey:latest && docker tag ${GITLAB_DOCKER_PROXY}/valkey/valkey:latest valkey/valkey:latest) &
       wait
       
-    - go test -race -skip "^(TestE2EFlow|TestScrapperKafkaBotFlow|TestAgentKafkaIntegration)$" -coverprofile=coverage.out ./...
+    - go test -skip "^(TestE2EFlow|TestScrapperKafkaBotFlow|TestAgentKafkaIntegration)$" -coverprofile=coverage.out ./...
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+.\d+)%/'
 
