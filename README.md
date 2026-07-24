@@ -16,7 +16,7 @@
 
 Приведён пример `.env` (в репозитории `.env.example`)
 
-` cp .env.example .env`
+`cp .env.example .env`
 
 Для работы достаточно поменять только `APP_TELEGRAM_TOKEN`
 
@@ -76,3 +76,9 @@ SCRAPPER_CLIENT_CB_OPEN_WINDOW=15
 # Запустить все тесты
 
 `make test`
+
+# Общая архитектура системы
+![Архитектура проекта](docs/architecture.png)
+
+# Диалоговая модель
+![Диалоговая модель](docs/dialogue_model.png)
