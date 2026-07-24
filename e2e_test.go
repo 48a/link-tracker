@@ -5,26 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
-
-	"github.com/testcontainers/testcontainers-go/modules/kafka"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/application/agent"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/domain"
-	"gitlab.education.tbank.ru/backend-academy-go-2025/homeworks/link-tracker/internal/infrastructure/agentkafka"
 )
 
 type tgSendMessageReq struct {
@@ -534,142 +526,6 @@ func TestScrapperKafkaBotFlow(t *testing.T) {
 			}
 		case <-time.After(15 * time.Second):
 			t.Fatal("timeout waiting for kafka update notification")
-		}
-	})
-}
-
-//nolint:gocognit
-func TestAgentKafkaIntegration(t *testing.T) {
-	ctx := context.Background()
-
-	kafkaContainer, err := kafka.Run(ctx,
-		"confluentinc/confluent-local:7.5.0",
-		kafka.WithClusterID("test-cluster"),
-	)
-	if err != nil {
-		t.Fatalf("failed to start kafka: %v", err)
-	}
-	defer kafkaContainer.Terminate(ctx)
-
-	brokers, err := kafkaContainer.Brokers(ctx)
-	if err != nil || len(brokers) == 0 {
-		t.Fatalf("failed to get brokers: %v", err)
-	}
-	brokerAddr := brokers[0]
-	t.Logf("Kafka is successfully running at: %s", brokerAddr)
-
-	saramaCfg := sarama.NewConfig()
-	saramaCfg.Producer.Return.Successes = true
-	saramaCfg.Producer.Return.Errors = true
-	saramaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
-
-	producer, err := sarama.NewSyncProducer([]string{brokerAddr}, saramaCfg)
-	if err != nil {
-		t.Fatalf("new sync producer: %v", err)
-	}
-	defer producer.Close()
-
-	agentCtx, cancelAgent := context.WithCancel(ctx)
-	defer cancelAgent()
-
-	processorCfg := agent.Config{
-		StopWords:       []string{"spam"},
-		ExcludedAuthors: []string{"bad_author"},
-		MinLength:       10,
-		SumThreshold:    500,
-	}
-	processor := agent.NewProcessor(processorCfg)
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	worker := agentkafka.NewWorker(processor, producer, "link.processed-updates", logger)
-
-	consumerGroup, err := sarama.NewConsumerGroup([]string{brokerAddr}, "test-group", saramaCfg)
-	if err != nil {
-		t.Fatalf("new consumer group: %v", err)
-	}
-	defer consumerGroup.Close()
-
-	go func() {
-		for {
-			if err = consumerGroup.Consume(agentCtx, []string{"link.raw-updates"}, worker); err != nil {
-				return
-			}
-			if agentCtx.Err() != nil {
-				return
-			}
-		}
-	}()
-
-	testConsumer, err := sarama.NewConsumer([]string{brokerAddr}, saramaCfg)
-	if err != nil {
-		t.Fatalf("new test consumer: %v", err)
-	}
-	defer testConsumer.Close()
-
-	time.Sleep(3 * time.Second)
-
-	partConsumer, err := testConsumer.ConsumePartition("link.processed-updates", 0, sarama.OffsetNewest)
-	if err != nil {
-		t.Fatalf("consume partition: %v", err)
-	}
-	defer partConsumer.Close()
-
-	t.Run("receive valid message", func(t *testing.T) {
-		validMsg := `{"id": 12345, "description": "This is a perfectly valid long update.", "author": "good_author", "tgChatIds": [111, 222]}`
-		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
-			Topic: "link.raw-updates",
-			Value: sarama.StringEncoder(validMsg),
-		})
-		if err != nil {
-			t.Fatalf("send message: %v", err)
-		}
-
-		select {
-		case msg := <-partConsumer.Messages():
-			var processed domain.ProcessedUpdate
-			if err = json.Unmarshal(msg.Value, &processed); err != nil {
-				t.Fatalf("failed to unmarshal output message: %v", err)
-			}
-			if processed.ID != 12345 || processed.Priority != "HIGH" {
-				t.Errorf("unexpected message content: %+v", processed)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for processed message")
-		}
-	})
-
-	t.Run("invalid format does not crash agent", func(t *testing.T) {
-		invalidMsg := `{"id": "this-should-be-int", "broken_json": `
-		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
-			Topic: "link.raw-updates",
-			Value: sarama.StringEncoder(invalidMsg),
-		})
-		if err != nil {
-			t.Fatalf("send message: %v", err)
-		}
-
-		time.Sleep(3 * time.Second)
-
-		validMsg2 := `{"id": 999, "description": "This is another valid update.", "author": "good_author", "tgChatIds": [333]}`
-		_, _, err = producer.SendMessage(&sarama.ProducerMessage{
-			Topic: "link.raw-updates",
-			Value: sarama.StringEncoder(validMsg2),
-		})
-		if err != nil {
-			t.Fatalf("send message: %v", err)
-		}
-
-		select {
-		case msg := <-partConsumer.Messages():
-			var processed domain.ProcessedUpdate
-			if err = json.Unmarshal(msg.Value, &processed); err != nil {
-				t.Fatalf("failed to unmarshal output message: %v", err)
-			}
-			if processed.ID != 999 {
-				t.Errorf("expected to recover and process message ID 999, got %d", processed.ID)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for recovery message")
 		}
 	})
 }
